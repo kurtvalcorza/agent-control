@@ -8,7 +8,9 @@ class InvalidTransition(ValueError):
 
 
 _ALLOWED: dict[RunState, frozenset[RunState]] = {
-    RunState.CREATED: frozenset({RunState.PLANNING, RunState.CANCELLING, RunState.FAILED}),
+    RunState.CREATED: frozenset(
+        {RunState.PLANNING, RunState.PAUSING, RunState.CANCELLING, RunState.FAILED}
+    ),
     RunState.PLANNING: frozenset(
         {RunState.READY, RunState.PAUSING, RunState.CANCELLING, RunState.FAILED}
     ),
