@@ -2,14 +2,63 @@
 
 from .controller import ControlPlane as _ControlPlane
 from .controller import RunBlocked, RunNotFound
-from .errors import CheckpointInvalid
+from .errors import CheckpointInvalid, FailureCategory, FailureRecord
 from .events import EventType
-from .models import Run, RunState
+from .models import NodeStatus, Run, RunState
 from .projections import project_run
 
 
 class ControlPlane(_ControlPlane):
     """Public runtime with fail-closed recovery and terminal transitions."""
+
+    def request_replan(
+        self,
+        run_id: str,
+        reason: str,
+        *,
+        invalidated_nodes: set[str] | None = None,
+    ) -> Run:
+        run = self.get_run(run_id)
+        limit = run.budget.limit.max_replans
+        if limit is not None and run.budget.replans >= limit:
+            return self._fail(
+                run,
+                FailureRecord(FailureCategory.BUDGET_EXHAUSTED, "replan limit reached"),
+            )
+        if invalidated_nodes:
+            for node_id in self._dependent_closure(run, invalidated_nodes):
+                current = self.get_run(run.id)
+                status = current.node_status.get(node_id, NodeStatus.PENDING)
+                if status != NodeStatus.INVALIDATED:
+                    self._set_node(current, node_id, NodeStatus.INVALIDATED)
+                    self._append(
+                        run.id,
+                        EventType.NODE_INVALIDATED,
+                        {"node_id": node_id, "reason": reason},
+                    )
+        run = self.get_run(run.id)
+        if run.state != RunState.PLANNING:
+            run = self._transition(run, RunState.PLANNING)
+        self._append(run.id, EventType.PLAN_REVISION_REQUESTED, {"reason": reason})
+        plan = self.planner.revise_plan(run=run, reason=reason, version=run.plan_version + 1)
+        self._validate_plan_for_runtime(run, plan)
+
+        old_nodes = {node.id: node for node in run.plan.nodes} if run.plan else {}
+        invalidated = invalidated_nodes or set()
+        invalidated_closure = self._dependent_closure(run, invalidated) if invalidated else set()
+        preserved = sorted(
+            node.id
+            for node in plan.nodes
+            if run.node_status.get(node.id) == NodeStatus.COMPLETED
+            and node.id not in invalidated_closure
+            and old_nodes.get(node.id) == node
+        )
+        self._append(
+            run.id,
+            EventType.PLAN_REVISED,
+            {"plan": self._plan_payload(plan), "preserved_completed": preserved, "reason": reason},
+        )
+        return self._transition(self.get_run(run.id), RunState.READY)
 
     def _complete(self, run: Run) -> Run:
         if run.state != RunState.VERIFYING:
