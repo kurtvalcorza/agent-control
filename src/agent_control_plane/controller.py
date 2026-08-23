@@ -50,7 +50,12 @@ class RunBlocked(RuntimeError):
 
 
 def _json_digest(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -103,7 +108,11 @@ class ControlPlane:
         if run.state == target:
             return run
         assert_transition(run.state, target)
-        self._append(run.id, EventType.STATE_CHANGED, {"from": run.state.value, "to": target.value})
+        self._append(
+            run.id,
+            EventType.STATE_CHANGED,
+            {"from": run.state.value, "to": target.value},
+        )
         return self.get_run(run.id)
 
     def _set_node(self, run: Run, node_id: str, target: NodeStatus) -> Run:
@@ -157,7 +166,10 @@ class ControlPlane:
             descriptors = self.capabilities.descriptors(name)
             if not descriptors:
                 raise CapabilityNotFound(name)
-            if not any(item.side_effect_class == node.side_effect_class for item in descriptors):
+            if not any(
+                item.side_effect_class == node.side_effect_class
+                for item in descriptors
+            ):
                 raise ValueError(
                     f"no provider for {name!r} matches side-effect class "
                     f"{node.side_effect_class.value!r}"
@@ -165,13 +177,15 @@ class ControlPlane:
 
     def plan_run(self, run_id: str) -> Run:
         run = self.get_run(run_id)
-        if run.state == RunState.CREATED:
-            run = self._transition(run, RunState.PLANNING)
-        elif run.state in {RunState.READY, RunState.PAUSED}:
+        if run.state in {RunState.CREATED, RunState.READY, RunState.PAUSED}:
             run = self._transition(run, RunState.PLANNING)
         elif run.state != RunState.PLANNING:
             raise RunBlocked(f"cannot plan from {run.state.value}")
-        self._append(run.id, EventType.PLANNING_STARTED, {"version": run.plan_version + 1})
+        self._append(
+            run.id,
+            EventType.PLANNING_STARTED,
+            {"version": run.plan_version + 1},
+        )
         try:
             plan = self.planner.create_plan(
                 run_id=run.id,
@@ -204,9 +218,10 @@ class ControlPlane:
             )
         if invalidated_nodes:
             for node_id in self._dependent_closure(run, invalidated_nodes):
-                status = self.get_run(run.id).node_status.get(node_id, NodeStatus.PENDING)
+                current = self.get_run(run.id)
+                status = current.node_status.get(node_id, NodeStatus.PENDING)
                 if status != NodeStatus.INVALIDATED:
-                    self._set_node(self.get_run(run.id), node_id, NodeStatus.INVALIDATED)
+                    self._set_node(current, node_id, NodeStatus.INVALIDATED)
                     self._append(
                         run.id,
                         EventType.NODE_INVALIDATED,
@@ -216,7 +231,11 @@ class ControlPlane:
         if run.state != RunState.PLANNING:
             run = self._transition(run, RunState.PLANNING)
         self._append(run.id, EventType.PLAN_REVISION_REQUESTED, {"reason": reason})
-        plan = self.planner.revise_plan(run=run, reason=reason, version=run.plan_version + 1)
+        plan = self.planner.revise_plan(
+            run=run,
+            reason=reason,
+            version=run.plan_version + 1,
+        )
         self._validate_plan_for_runtime(run, plan)
         invalidated = invalidated_nodes or set()
         closure = self._dependent_closure(run, invalidated) if invalidated else set()
@@ -230,7 +249,11 @@ class ControlPlane:
         self._append(
             run.id,
             EventType.PLAN_REVISED,
-            {"plan": asdict(plan), "preserved_completed": preserved, "reason": reason},
+            {
+                "plan": asdict(plan),
+                "preserved_completed": preserved,
+                "reason": reason,
+            },
         )
         return self._transition(self.get_run(run.id), RunState.READY)
 
@@ -254,7 +277,9 @@ class ControlPlane:
         while changed:
             changed = False
             for node in run.plan.nodes:
-                if node.id not in result and any(dep in result for dep in node.dependencies):
+                if node.id not in result and any(
+                    dep in result for dep in node.dependencies
+                ):
                     result.add(node.id)
                     changed = True
         return result
@@ -266,7 +291,10 @@ class ControlPlane:
                 intent = dict(event.payload["intent"])
                 records[str(intent["id"])] = {
                     "intent": intent,
-                    "authorized": intent["authorization_state"] == AuthorizationState.NOT_REQUIRED.value,
+                    "authorized": (
+                        intent["authorization_state"]
+                        == AuthorizationState.NOT_REQUIRED.value
+                    ),
                     "rejected": False,
                     "receipt": None,
                 }
@@ -322,10 +350,18 @@ class ControlPlane:
             authorization_state=authorization,
             reversible=reversible,
         )
-        self._append(run.id, EventType.ACTION_INTENT_CREATED, {"intent": asdict(intent)})
+        self._append(
+            run.id,
+            EventType.ACTION_INTENT_CREATED,
+            {"intent": asdict(intent)},
+        )
         return self._intent_records(run.id)[intent.id]
 
-    def _gate_for_intent(self, run_id: str, intent_id: str) -> dict[str, Any] | None:
+    def _gate_for_intent(
+        self,
+        run_id: str,
+        intent_id: str,
+    ) -> dict[str, Any] | None:
         for gate in self.list_pending_gates(run_id):
             if gate.get("requested_action") == intent_id:
                 return gate
@@ -341,8 +377,16 @@ class ControlPlane:
                 requested_action=str(intent["id"]),
                 node_id=str(intent["node_id"]),
             )
-            self._append(run.id, EventType.HUMAN_GATE_OPENED, {"gate": asdict(gate)})
-        run = self._set_node(self.get_run(run.id), str(intent["node_id"]), NodeStatus.BLOCKED)
+            self._append(
+                run.id,
+                EventType.HUMAN_GATE_OPENED,
+                {"gate": asdict(gate)},
+            )
+        run = self._set_node(
+            self.get_run(run.id),
+            str(intent["node_id"]),
+            NodeStatus.BLOCKED,
+        )
         run = self._transition(run, RunState.PAUSING)
         run = self._transition(run, RunState.PAUSED)
         self._append(run.id, EventType.RUN_PAUSED, {"reason": "human_gate"})
@@ -384,7 +428,8 @@ class ControlPlane:
         )
         if not ready:
             if run.node_status and all(
-                status == NodeStatus.COMPLETED for status in run.node_status.values()
+                status == NodeStatus.COMPLETED
+                for status in run.node_status.values()
             ):
                 return self._complete(run)
             raise RunBlocked("no executable node is ready")
@@ -397,19 +442,23 @@ class ControlPlane:
                 run.budget,
                 side_effect_class=node.side_effect_class,
             )
-        except CapabilityBudgetExceeded:
+        except CapabilityBudgetExceeded as exc:
             self._append(
                 run.id,
                 EventType.OBSERVATION_RECORDED,
-                {"class": ObservationClass.BUDGET_PRESSURE.value, "node_id": node_id},
+                {
+                    "class": ObservationClass.BUDGET_PRESSURE.value,
+                    "node_id": node_id,
+                },
             )
-            raise RunBlocked("budget pressure: no eligible provider")
+            raise RunBlocked("budget pressure: no eligible provider") from exc
         descriptor = provider.descriptor
         decision = self._policy_decision(run, node_id, provider)
         if decision.justification_required and not node.justification:
             raise RunBlocked("policy requires node justification")
-        if decision.required_verification and node.verification.kind.value not in set(
+        if (
             decision.required_verification
+            and node.verification.kind.value not in set(decision.required_verification)
         ):
             raise RunBlocked("plan does not satisfy policy-required verification")
         if decision.decision == PolicyDecisionType.DENY:
@@ -432,7 +481,10 @@ class ControlPlane:
                     reversible=descriptor.reversible,
                     authorization=auth,
                 )
-            if decision.decision == PolicyDecisionType.REQUIRE_HUMAN and not record["authorized"]:
+            if (
+                decision.decision == PolicyDecisionType.REQUIRE_HUMAN
+                and not record["authorized"]
+            ):
                 return self._open_gate(self.get_run(run.id), record, decision.reason)
             if record["rejected"]:
                 raise RunBlocked("action intent was rejected")
@@ -457,7 +509,9 @@ class ControlPlane:
         try:
             result = provider.invoke(dict(node.inputs))
         except TransientCapabilityError as exc:
-            if is_side_effecting(descriptor.side_effect_class) and not descriptor.idempotent:
+            if is_side_effecting(
+                descriptor.side_effect_class
+            ) and not descriptor.idempotent:
                 self._append(
                     run.id,
                     EventType.OBSERVATION_RECORDED,
@@ -488,7 +542,11 @@ class ControlPlane:
                         node_id=node_id,
                     ),
                 )
-            self._append(run.id, EventType.RETRY_RECORDED, {"node_id": node_id, "count": count})
+            self._append(
+                run.id,
+                EventType.RETRY_RECORDED,
+                {"node_id": node_id, "count": count},
+            )
             self._set_node(self.get_run(run.id), node_id, NodeStatus.PENDING)
             return self._transition(self.get_run(run.id), RunState.READY)
         except Exception as exc:
@@ -506,13 +564,21 @@ class ControlPlane:
                 return self.pause_run(run.id, reason="ambiguous side effect")
             return self._fail(
                 self.get_run(run.id),
-                FailureRecord(FailureCategory.CAPABILITY_FAILURE, str(exc), node_id=node_id),
+                FailureRecord(
+                    FailureCategory.CAPABILITY_FAILURE,
+                    str(exc),
+                    node_id=node_id,
+                ),
             )
 
         self._append(
             run.id,
             EventType.CAPABILITY_INVOKED,
-            {"node_id": node_id, "provider_id": descriptor.provider_id, "output": result.output},
+            {
+                "node_id": node_id,
+                "provider_id": descriptor.provider_id,
+                "output": result.output,
+            },
         )
         budget = self.get_run(run.id).budget
         self._append(
@@ -528,7 +594,10 @@ class ControlPlane:
         if not self.get_run(run.id).budget.can_spend():
             return self._fail(
                 self.get_run(run.id),
-                FailureRecord(FailureCategory.BUDGET_EXHAUSTED, "hard budget exceeded"),
+                FailureRecord(
+                    FailureCategory.BUDGET_EXHAUSTED,
+                    "hard budget exceeded",
+                ),
             )
 
         run = self._transition(self.get_run(run.id), RunState.VERIFYING)
@@ -559,7 +628,9 @@ class ControlPlane:
                 receipt = ActionReceipt(
                     id=new_id("receipt"),
                     intent_id=str(record["intent"]["id"]),
-                    actual_effects=tuple(result.metadata.get("effects", (node.objective,))),
+                    actual_effects=tuple(
+                        result.metadata.get("effects", (node.objective,))
+                    ),
                     verification=verification,
                     rollback_ref=result.metadata.get("rollback_ref"),
                 )
@@ -572,13 +643,20 @@ class ControlPlane:
             self._append(run.id, EventType.NODE_COMPLETED, {"node_id": node_id})
             run = self._transition(self.get_run(run.id), RunState.READY)
             if run.node_status and all(
-                status == NodeStatus.COMPLETED for status in run.node_status.values()
+                status == NodeStatus.COMPLETED
+                for status in run.node_status.values()
             ):
                 return self._complete(run)
             return run
-        if verification.status in {VerificationStatus.BLOCKED, VerificationStatus.INCONCLUSIVE}:
+        if verification.status in {
+            VerificationStatus.BLOCKED,
+            VerificationStatus.INCONCLUSIVE,
+        }:
             self._set_node(self.get_run(run.id), node_id, NodeStatus.BLOCKED)
-            return self.pause_run(run.id, reason=verification.message or "verification blocked")
+            return self.pause_run(
+                run.id,
+                reason=verification.message or "verification blocked",
+            )
         return self._fail(
             self.get_run(run.id),
             FailureRecord(
@@ -591,7 +669,11 @@ class ControlPlane:
     def _complete(self, run: Run) -> Run:
         if run.state != RunState.VERIFYING:
             run = self._transition(run, RunState.VERIFYING)
-        self._append(run.id, EventType.RUN_COMPLETED, {"outcome": "success criteria satisfied"})
+        self._append(
+            run.id,
+            EventType.RUN_COMPLETED,
+            {"outcome": "success criteria satisfied"},
+        )
         return self.get_run(run.id)
 
     def run_until_blocked(self, run_id: str, *, max_steps: int = 100) -> Run:
@@ -627,8 +709,21 @@ class ControlPlane:
                 resolved.add(str(event.payload["gate_id"]))
         return [gate for gate_id, gate in opened.items() if gate_id not in resolved]
 
-    def approve_gate(self, run_id: str, gate_id: str, *, decided_by: str = "operator") -> Run:
-        gate = next((item for item in self.list_pending_gates(run_id) if item["id"] == gate_id), None)
+    def approve_gate(
+        self,
+        run_id: str,
+        gate_id: str,
+        *,
+        decided_by: str = "operator",
+    ) -> Run:
+        gate = next(
+            (
+                item
+                for item in self.list_pending_gates(run_id)
+                if item["id"] == gate_id
+            ),
+            None,
+        )
         if gate is None:
             raise RunBlocked("gate is not pending")
         intent_id = str(gate["requested_action"])
@@ -648,8 +743,21 @@ class ControlPlane:
             self._set_node(current, node_id, NodeStatus.PENDING)
         return self.resume_run(run_id)
 
-    def reject_gate(self, run_id: str, gate_id: str, *, decided_by: str = "operator") -> Run:
-        gate = next((item for item in self.list_pending_gates(run_id) if item["id"] == gate_id), None)
+    def reject_gate(
+        self,
+        run_id: str,
+        gate_id: str,
+        *,
+        decided_by: str = "operator",
+    ) -> Run:
+        gate = next(
+            (
+                item
+                for item in self.list_pending_gates(run_id)
+                if item["id"] == gate_id
+            ),
+            None,
+        )
         if gate is None:
             raise RunBlocked("gate is not pending")
         self._append(
@@ -677,7 +785,8 @@ class ControlPlane:
                 "state": run.state.value,
                 "plan_version": run.plan_version,
                 "node_status": {
-                    node_id: status.value for node_id, status in sorted(run.node_status.items())
+                    node_id: status.value
+                    for node_id, status in sorted(run.node_status.items())
                 },
                 "budget": asdict(run.budget),
                 "pending_action_intent_id": run.pending_action_intent_id,
@@ -733,18 +842,30 @@ class ControlPlane:
                 raise CheckpointInvalid("checkpoint references an empty projection")
             if self._checkpoint_digest(projected) != checkpoint["projected_state_digest"]:
                 raise CheckpointInvalid("checkpoint digest does not match replayed state")
-            unresolved = set(str(item) for item in checkpoint.get("unresolved_action_intents", []))
+            unresolved = {
+                str(item)
+                for item in checkpoint.get("unresolved_action_intents", [])
+            }
             records = self._intent_records(run_id)
             for intent_id in unresolved:
                 record = records.get(intent_id)
                 if record is None:
                     raise CheckpointInvalid("checkpoint references unknown action intent")
-                if not record["authorized"] and not record["rejected"] and record["receipt"] is None:
+                if (
+                    not record["authorized"]
+                    and not record["rejected"]
+                    and record["receipt"] is None
+                ):
                     raise RunBlocked("unsafe resume: unresolved side-effect intent")
                 if record["authorized"] and record["receipt"] is None:
                     pending_gate = self._gate_for_intent(run_id, intent_id)
-                    if pending_gate is None and record["intent"]["authorization_state"] != "pending":
-                        raise RunBlocked("unsafe resume: ambiguous authorized side effect")
+                    if (
+                        pending_gate is None
+                        and record["intent"]["authorization_state"] != "pending"
+                    ):
+                        raise RunBlocked(
+                            "unsafe resume: ambiguous authorized side effect"
+                        )
         self._append(run.id, EventType.RESUME_REQUESTED, {})
         target = RunState.READY if run.plan is not None else RunState.PLANNING
         run = self._transition(run, target)
