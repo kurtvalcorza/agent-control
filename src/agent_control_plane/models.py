@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 class RiskLevel(StrEnum):
@@ -51,7 +56,6 @@ class SideEffectClass(StrEnum):
 
 
 def is_side_effecting(value: SideEffectClass | str) -> bool:
-    """Return whether a capability can create externally visible state."""
     effect = SideEffectClass(value)
     return effect not in {SideEffectClass.NONE, SideEffectClass.READ_ONLY}
 
@@ -79,7 +83,6 @@ class VerificationStatus(StrEnum):
     BLOCKED = "blocked"
     RETRY = "retry"
     REPLAN = "replan"
-
     HUMAN_GATE = "blocked"
 
 
@@ -194,6 +197,19 @@ class BudgetState:
 
 
 @dataclass(frozen=True, slots=True)
+class BudgetReservation:
+    id: str
+    run_id: str
+    node_id: str
+    provider_id: str
+    estimated_cost_usd: float = 0.0
+    estimated_elapsed_ms: int = 0
+    estimated_model_calls: int = 0
+    estimated_tool_calls: int = 0
+    created_at: str = field(default_factory=_utc_now)
+
+
+@dataclass(frozen=True, slots=True)
 class CapabilityDescriptor:
     name: str
     version: str
@@ -237,6 +253,8 @@ class ActionIntent:
     side_effect_class: SideEffectClass
     authorization_state: AuthorizationState
     reversible: bool
+    compensation: dict[str, Any] | None = None
+    created_at: str = field(default_factory=_utc_now)
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +264,10 @@ class ActionReceipt:
     actual_effects: tuple[str, ...]
     verification: VerificationResult
     rollback_ref: str | None = None
+    started_at: str = field(default_factory=_utc_now)
+    completed_at: str | None = field(default_factory=_utc_now)
+    precondition_refs: tuple[str, ...] = ()
+    artifact_refs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,7 +294,7 @@ class Checkpoint:
     budget_state: dict[str, Any]
     unresolved_action_intents: tuple[str, ...]
     external_resource_versions: tuple[str, ...] = ()
-    created_at: str = ""
+    created_at: str = field(default_factory=_utc_now)
 
 
 @dataclass(frozen=True, slots=True)
