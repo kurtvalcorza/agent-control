@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+CURRENT_EVENT_SCHEMA_VERSION = "1"
+SUPPORTED_EVENT_SCHEMA_VERSIONS = frozenset({CURRENT_EVENT_SCHEMA_VERSION})
+
 
 class EventType(StrEnum):
     RUN_CREATED = "RunCreated"
@@ -65,7 +68,7 @@ class Event:
     occurred_at: str
     sequence: int
     payload: dict[str, Any]
-    schema_version: str = "1"
+    schema_version: str = CURRENT_EVENT_SCHEMA_VERSION
     actor: str = "runtime"
     causation_id: str | None = None
     correlation_id: str | None = None

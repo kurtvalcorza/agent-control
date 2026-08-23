@@ -4,13 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .models import (
-    BudgetState,
-    CapabilityDescriptor,
-    CapabilityResult,
-    RiskLevel,
-    SideEffectClass,
-)
+from .models import BudgetState, CapabilityDescriptor, CapabilityResult, RiskLevel, SideEffectClass
 
 
 class CapabilityError(RuntimeError):
@@ -42,6 +36,8 @@ class Capability(Protocol):
 
     def invoke(self, arguments: dict[str, Any]) -> CapabilityResult: ...
 
+    def health(self) -> dict[str, Any]: ...
+
 
 @dataclass(slots=True)
 class InProcessCapability:
@@ -53,6 +49,14 @@ class InProcessCapability:
         if isinstance(result, CapabilityResult):
             return result
         return CapabilityResult(output=result)
+
+    def health(self) -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "provider_id": self.descriptor.provider_id,
+            "capability": self.descriptor.name,
+            "version": self.descriptor.version,
+        }
 
 
 _RISK_ORDER = {
@@ -106,6 +110,27 @@ class CapabilityRegistry:
             for item in providers
         )
 
+    def health(self, name: str | None = None) -> tuple[dict[str, Any], ...]:
+        providers = (
+            self._providers.get(name, [])
+            if name is not None
+            else [item for items in self._providers.values() for item in items]
+        )
+        results: list[dict[str, Any]] = []
+        for provider in providers:
+            try:
+                results.append(provider.health())
+            except Exception as exc:
+                results.append(
+                    {
+                        "status": "error",
+                        "provider_id": provider.descriptor.provider_id,
+                        "capability": provider.descriptor.name,
+                        "detail": str(exc),
+                    }
+                )
+        return tuple(results)
+
     def descriptors(self, name: str) -> tuple[CapabilityDescriptor, ...]:
         return tuple(item.descriptor for item in self._providers.get(name, []))
 
@@ -127,17 +152,14 @@ class CapabilityRegistry:
         class_matches = [
             item
             for item in providers
-            if side_effect_class is None
-            or item.descriptor.side_effect_class == side_effect_class
+            if side_effect_class is None or item.descriptor.side_effect_class == side_effect_class
         ]
         if not class_matches:
             raise CapabilityAuthorizationError(
                 f"no provider for {name!r} matches side-effect class"
             )
         effective_permissions = (
-            granted_permissions
-            if granted_permissions is not None
-            else self.granted_permissions
+            granted_permissions if granted_permissions is not None else self.granted_permissions
         )
         effective_max_risk = max_risk if max_risk is not None else self.max_risk
         authorized = [

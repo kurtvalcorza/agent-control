@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from .events import Event, EventType
+from .events import Event, EventType, SUPPORTED_EVENT_SCHEMA_VERSIONS
 from .models import (
     BudgetLimit,
     BudgetState,
@@ -41,6 +41,10 @@ def _plan(payload: dict[str, Any]) -> Plan:
                 kind=VerificationKind(node["verification"]["kind"]),
                 criteria=tuple(node["verification"].get("criteria", [])),
                 required=bool(node["verification"].get("required", True)),
+                additional_kinds=tuple(
+                    VerificationKind(value)
+                    for value in node["verification"].get("additional_kinds", [])
+                ),
             ),
             side_effect_class=SideEffectClass(node.get("side_effect_class", "none")),
             expected_outputs=tuple(node.get("expected_outputs", [])),
@@ -69,8 +73,8 @@ def validate_event_stream(events: list[Event]) -> None:
         if event.id in seen:
             raise ValueError(f"duplicate event id: {event.id}")
         seen.add(event.id)
-        if not event.schema_version:
-            raise ValueError("event schema version is required")
+        if event.schema_version not in SUPPORTED_EVENT_SCHEMA_VERSIONS:
+            raise ValueError(f"unsupported event schema version: {event.schema_version!r}")
         timestamp = datetime.fromisoformat(event.occurred_at.replace("Z", "+00:00"))
         if timestamp.tzinfo is None:
             raise ValueError("event timestamp must be timezone-aware UTC")
@@ -85,12 +89,12 @@ def project_run(events: list[Event]) -> Run | None:
     created = events[0]
     if created.type != EventType.RUN_CREATED:
         raise ValueError("first event must be RunCreated")
-    p = created.payload
-    limit_payload = p["budget_limit"]
+    payload = created.payload
+    limit_payload = payload["budget_limit"]
     run = Run(
         id=created.run_id,
-        goal=_goal(p["goal"]),
-        risk_level=RiskLevel(p["risk_level"]),
+        goal=_goal(payload["goal"]),
+        risk_level=RiskLevel(payload["risk_level"]),
         state=RunState.CREATED,
         plan_version=0,
         budget=BudgetState(
@@ -103,7 +107,7 @@ def project_run(events: list[Event]) -> Run | None:
                 max_retries_per_node=limit_payload.get("max_retries_per_node", 2),
             )
         ),
-        policy_profile=p["policy_profile"],
+        policy_profile=payload["policy_profile"],
         created_at=created.occurred_at,
         updated_at=created.occurred_at,
     )

@@ -10,6 +10,22 @@ from .capabilities import CapabilityInvocationError
 from .models import CapabilityDescriptor, CapabilityResult
 
 
+def _optional_int(payload: dict[str, Any], key: str) -> int | None:
+    value = payload.get(key)
+    return None if value is None else int(value)
+
+
+def _result(payload: dict[str, Any]) -> CapabilityResult:
+    return CapabilityResult(
+        output=payload["output"],
+        actual_cost_usd=float(payload.get("actual_cost_usd", 0.0)),
+        actual_elapsed_ms=_optional_int(payload, "actual_elapsed_ms"),
+        actual_model_calls=_optional_int(payload, "actual_model_calls"),
+        actual_tool_calls=_optional_int(payload, "actual_tool_calls"),
+        metadata=dict(payload.get("metadata", {})),
+    )
+
+
 @dataclass(slots=True)
 class SubprocessCapability:
     """JSON-over-stdin/stdout capability boundary with no shell invocation."""
@@ -17,6 +33,15 @@ class SubprocessCapability:
     descriptor: CapabilityDescriptor
     command: Sequence[str]
     timeout_seconds: float = 60.0
+
+    def health(self) -> dict[str, Any]:
+        return {
+            "status": "configured" if self.command else "error",
+            "provider_id": self.descriptor.provider_id,
+            "capability": self.descriptor.name,
+            "transport": "subprocess",
+            "command": self.command[0] if self.command else None,
+        }
 
     def invoke(self, arguments: dict[str, Any]) -> CapabilityResult:
         try:
@@ -38,11 +63,7 @@ class SubprocessCapability:
         except json.JSONDecodeError as exc:
             raise CapabilityInvocationError("subprocess returned invalid JSON") from exc
         if isinstance(payload, dict) and "output" in payload:
-            return CapabilityResult(
-                output=payload["output"],
-                actual_cost_usd=float(payload.get("actual_cost_usd", 0.0)),
-                metadata=dict(payload.get("metadata", {})),
-            )
+            return _result(payload)
         return CapabilityResult(output=payload)
 
 
@@ -57,6 +78,15 @@ class MCPCapability:
     tool_name: str
     invoke_tool: MCPInvoker
 
+    def health(self) -> dict[str, Any]:
+        return {
+            "status": "configured",
+            "provider_id": self.descriptor.provider_id,
+            "capability": self.descriptor.name,
+            "transport": "mcp",
+            "tool_name": self.tool_name,
+        }
+
     def invoke(self, arguments: dict[str, Any]) -> CapabilityResult:
         try:
             payload = self.invoke_tool(self.tool_name, arguments)
@@ -64,11 +94,7 @@ class MCPCapability:
             raise CapabilityInvocationError(f"MCP invocation failed: {exc}") from exc
         if "output" not in payload:
             raise CapabilityInvocationError("MCP response must contain output")
-        return CapabilityResult(
-            output=payload["output"],
-            actual_cost_usd=float(payload.get("actual_cost_usd", 0.0)),
-            metadata=dict(payload.get("metadata", {})),
-        )
+        return _result(payload)
 
 
 @dataclass(slots=True)
