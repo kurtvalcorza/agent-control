@@ -34,7 +34,7 @@ def evaluate_events(events: list[Event]) -> RunEvaluation:
         elif event.type == EventType.PLAN_REVISED:
             replans += 1
         elif event.type == EventType.OBSERVATION_RECORDED:
-            classification = str(event.payload.get("classification", ""))
+            classification = str(event.payload.get("class", ""))
             if classification:
                 failure_classes.append(classification)
             if classification == "verification_failure":
