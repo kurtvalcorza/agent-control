@@ -46,7 +46,6 @@ class SideEffectClass(StrEnum):
     FINANCIAL = "financial"
     PRIVILEGED = "privileged"
 
-    # Backward-compatible aliases used by the initial implementation.
     READ = "read_only"
     WRITE = "reversible_write"
 
@@ -81,7 +80,6 @@ class VerificationStatus(StrEnum):
     RETRY = "retry"
     REPLAN = "replan"
 
-    # Compatibility alias for the early runtime API.
     HUMAN_GATE = "blocked"
 
 
@@ -172,18 +170,26 @@ class BudgetState:
         model_calls: int = 0,
         tool_calls: int = 0,
     ) -> bool:
-        if self.limit.max_cost_usd is not None:
-            if self.spent_cost_usd + estimated_cost_usd > self.limit.max_cost_usd:
-                return False
-        if self.limit.max_elapsed_ms is not None:
-            if self.elapsed_ms + estimated_elapsed_ms > self.limit.max_elapsed_ms:
-                return False
-        if self.limit.max_model_calls is not None:
-            if self.model_calls + model_calls > self.limit.max_model_calls:
-                return False
-        if self.limit.max_tool_calls is not None:
-            if self.tool_calls + tool_calls > self.limit.max_tool_calls:
-                return False
+        if (
+            self.limit.max_cost_usd is not None
+            and self.spent_cost_usd + estimated_cost_usd > self.limit.max_cost_usd
+        ):
+            return False
+        if (
+            self.limit.max_elapsed_ms is not None
+            and self.elapsed_ms + estimated_elapsed_ms > self.limit.max_elapsed_ms
+        ):
+            return False
+        if (
+            self.limit.max_model_calls is not None
+            and self.model_calls + model_calls > self.limit.max_model_calls
+        ):
+            return False
+        if (
+            self.limit.max_tool_calls is not None
+            and self.tool_calls + tool_calls > self.limit.max_tool_calls
+        ):
+            return False
         return True
 
 
