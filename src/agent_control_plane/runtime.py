@@ -9,7 +9,66 @@ from .projections import project_run
 
 
 class ControlPlane(_ControlPlane):
-    """Public runtime with fail-closed resume checks for started side effects."""
+    """Public runtime with fail-closed recovery and terminal transitions."""
+
+    def _complete(self, run: Run) -> Run:
+        if run.state != RunState.VERIFYING:
+            run = self._transition(run, RunState.VERIFYING)
+        run = self._transition(run, RunState.COMPLETED)
+        self._append(
+            run.id,
+            EventType.RUN_COMPLETED,
+            {"outcome": "success criteria satisfied"},
+        )
+        return self.get_run(run.id)
+
+    def cancel_run(self, run_id: str) -> Run:
+        run = self.get_run(run_id)
+        if run.state in {RunState.COMPLETED, RunState.FAILED, RunState.CANCELLED}:
+            return run
+        self._append(run.id, EventType.CANCEL_REQUESTED, {})
+        run = self._transition(run, RunState.CANCELLING)
+        compensation_failed = False
+        if self.compensator is not None:
+            for action in reversed(self.list_actions(run.id)):
+                intent = action["intent"]
+                receipt = action["receipt"]
+                if receipt is None or not bool(intent["reversible"]):
+                    continue
+                self._append(
+                    run.id,
+                    EventType.COMPENSATION_ATTEMPTED,
+                    {"intent_id": intent["id"], "receipt_id": receipt["id"]},
+                )
+                result = self.compensator.compensate(run_id=run.id, action=action)
+                kind = (
+                    EventType.COMPENSATION_SUCCEEDED
+                    if result.success
+                    else EventType.COMPENSATION_FAILED
+                )
+                self._append(
+                    run.id,
+                    kind,
+                    {
+                        "intent_id": intent["id"],
+                        "detail": result.detail,
+                        "metadata": result.metadata or {},
+                    },
+                )
+                compensation_failed = compensation_failed or not result.success
+        run = self._transition(self.get_run(run.id), RunState.CANCELLED)
+        self._append(
+            run.id,
+            EventType.RUN_CANCELLED,
+            {
+                "outcome": (
+                    "cancelled_with_compensation_failure"
+                    if compensation_failed
+                    else "cancelled"
+                )
+            },
+        )
+        return self.get_run(run.id)
 
     def resume_run(self, run_id: str) -> Run:
         run = self.get_run(run_id)
