@@ -19,9 +19,7 @@ from .ids import new_id
 from .memory import WorkingMemory
 from .models import (
     ActionReceipt,
-    BudgetLimit,
     BudgetReservation,
-    BudgetState,
     NodeStatus,
     Plan,
     Run,
@@ -71,11 +69,10 @@ class ControlPlane(_ControlPlane):
         validate_plan_secrets(plan)
         super()._validate_plan_for_runtime(run, plan)
         require_goal_coverage(run.goal, plan)
-        probe_budget = BudgetState(BudgetLimit())
         for node in plan.nodes:
             self.capabilities.resolve(
                 node.required_capabilities[0],
-                probe_budget,
+                run.budget,
                 side_effect_class=node.side_effect_class,
             )
 
@@ -95,6 +92,7 @@ class ControlPlane(_ControlPlane):
             {
                 "node_id": node_id,
                 "policy_id": decision.policy_id,
+                "policy_version": decision.policy_version,
                 "decision": decision.decision.value,
                 "reason": decision.reason,
                 "required_verification": list(decision.required_verification),
@@ -181,11 +179,7 @@ class ControlPlane(_ControlPlane):
         self._append(
             run.id,
             EventType.PLAN_REVISED,
-            {
-                "plan": asdict(plan),
-                "preserved_completed": preserved,
-                "reason": reason,
-            },
+            {"plan": asdict(plan), "preserved_completed": preserved, "reason": reason},
         )
         return self._transition(self.get_run(run.id), RunState.READY)
 
@@ -306,16 +300,11 @@ class ControlPlane(_ControlPlane):
                 self._append(
                     run.id,
                     EventType.BUDGET_RELEASED,
-                    {
-                        "reservation_id": reservation.id,
-                        "reason": "execution did not start",
-                    },
+                    {"reservation_id": reservation.id, "reason": "execution did not start"},
                 )
             raise
         new_events = [
-            event
-            for event in self._events(run.id)
-            if event.sequence > reserved_event.sequence
+            event for event in self._events(run.id) if event.sequence > reserved_event.sequence
         ]
         invoked = any(
             event.type == EventType.CAPABILITY_INVOKED
@@ -325,6 +314,12 @@ class ControlPlane(_ControlPlane):
         started = any(
             event.type == EventType.ACTION_STARTED
             and event.payload.get("node_id") == node.id
+            for event in new_events
+        )
+        transient_retry = any(
+            event.type == EventType.OBSERVATION_RECORDED
+            and event.payload.get("node_id") == node.id
+            and event.payload.get("class") == "transient_failure"
             for event in new_events
         )
         if invoked:
@@ -339,6 +334,17 @@ class ControlPlane(_ControlPlane):
                     "actual_model_calls": after.model_calls - before.model_calls,
                     "actual_tool_calls": after.tool_calls - before.tool_calls,
                 },
+            )
+        elif started and transient_retry and descriptor.idempotent:
+            self.resolve_budget_reservation(
+                run.id,
+                reservation.id,
+                consumed=True,
+                actual_cost_usd=descriptor.estimated_cost_usd,
+                elapsed_ms=descriptor.estimated_elapsed_ms,
+                model_calls=descriptor.estimated_model_calls,
+                tool_calls=descriptor.estimated_tool_calls,
+                reason="conservative accounting for idempotent failed attempt",
             )
         elif not started:
             self._append(
@@ -510,8 +516,7 @@ class ControlPlane(_ControlPlane):
             if snapshot_ref:
                 self._restore_memory_snapshot(run_id, str(snapshot_ref))
             versions = tuple(
-                str(item)
-                for item in checkpoint.get("external_resource_versions", [])
+                str(item) for item in checkpoint.get("external_resource_versions", [])
             )
             if self.resource_versions is not None and versions:
                 changed = self.resource_versions.validate(run, versions)
@@ -525,9 +530,7 @@ class ControlPlane(_ControlPlane):
                             "resources": list(changed),
                         },
                     )
-                    raise RunBlocked(
-                        "external resource versions changed; replan required"
-                    )
+                    raise RunBlocked("external resource versions changed; replan required")
             unresolved = {
                 str(item) for item in checkpoint.get("unresolved_action_intents", [])
             }
@@ -597,10 +600,9 @@ class ControlPlane(_ControlPlane):
         result = super().inspect_run(run_id)
         result["budget_reservations"] = self.list_budget_reservations(run_id)
         result["working_memory_snapshot_ref"] = (
-            self.working_memory.snapshot_ref()
-            if self.working_memory is not None
-            else None
+            self.working_memory.snapshot_ref() if self.working_memory is not None else None
         )
+        result["capability_health"] = self.capabilities.health()
         return result
 
     def cancel_run(self, run_id: str) -> Run:

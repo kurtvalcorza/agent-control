@@ -65,9 +65,7 @@ _NODE_ALLOWED: dict[NodeStatus, frozenset[NodeStatus]] = {
     NodeStatus.PENDING: frozenset(
         {NodeStatus.READY, NodeStatus.RUNNING, NodeStatus.BLOCKED, NodeStatus.INVALIDATED}
     ),
-    NodeStatus.READY: frozenset(
-        {NodeStatus.RUNNING, NodeStatus.BLOCKED, NodeStatus.INVALIDATED}
-    ),
+    NodeStatus.READY: frozenset({NodeStatus.RUNNING, NodeStatus.BLOCKED, NodeStatus.INVALIDATED}),
     NodeStatus.RUNNING: frozenset(
         {NodeStatus.VERIFYING, NodeStatus.PENDING, NodeStatus.BLOCKED, NodeStatus.FAILED}
     ),
@@ -81,7 +79,13 @@ _NODE_ALLOWED: dict[NodeStatus, frozenset[NodeStatus]] = {
         }
     ),
     NodeStatus.BLOCKED: frozenset(
-        {NodeStatus.PENDING, NodeStatus.COMPLETED, NodeStatus.INVALIDATED, NodeStatus.FAILED}
+        {
+            NodeStatus.PENDING,
+            NodeStatus.VERIFYING,
+            NodeStatus.COMPLETED,
+            NodeStatus.INVALIDATED,
+            NodeStatus.FAILED,
+        }
     ),
     NodeStatus.COMPLETED: frozenset({NodeStatus.INVALIDATED}),
     NodeStatus.FAILED: frozenset({NodeStatus.INVALIDATED}),
@@ -91,6 +95,4 @@ _NODE_ALLOWED: dict[NodeStatus, frozenset[NodeStatus]] = {
 
 def assert_node_transition(current: NodeStatus, target: NodeStatus) -> None:
     if target not in _NODE_ALLOWED[current]:
-        raise InvalidTransition(
-            f"invalid node transition: {current.value} -> {target.value}"
-        )
+        raise InvalidTransition(f"invalid node transition: {current.value} -> {target.value}")

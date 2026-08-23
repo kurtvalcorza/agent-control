@@ -120,6 +120,16 @@ class VerificationSpec:
     kind: VerificationKind
     criteria: tuple[str, ...] = ()
     required: bool = True
+    additional_kinds: tuple[VerificationKind, ...] = ()
+
+    def __post_init__(self) -> None:
+        kinds = (self.kind, *self.additional_kinds)
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("verification kinds must be unique")
+
+    @property
+    def kinds(self) -> tuple[VerificationKind, ...]:
+        return (self.kind, *self.additional_kinds)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +165,19 @@ class BudgetLimit:
     max_replans: int | None = None
     max_retries_per_node: int = 2
 
+    def __post_init__(self) -> None:
+        values = {
+            "max_cost_usd": self.max_cost_usd,
+            "max_elapsed_ms": self.max_elapsed_ms,
+            "max_model_calls": self.max_model_calls,
+            "max_tool_calls": self.max_tool_calls,
+            "max_replans": self.max_replans,
+            "max_retries_per_node": self.max_retries_per_node,
+        }
+        for name, value in values.items():
+            if value is not None and value < 0:
+                raise ValueError(f"{name} must be non-negative")
+
 
 @dataclass(slots=True)
 class BudgetState:
@@ -173,26 +196,18 @@ class BudgetState:
         model_calls: int = 0,
         tool_calls: int = 0,
     ) -> bool:
-        if (
-            self.limit.max_cost_usd is not None
-            and self.spent_cost_usd + estimated_cost_usd > self.limit.max_cost_usd
-        ):
-            return False
-        if (
-            self.limit.max_elapsed_ms is not None
-            and self.elapsed_ms + estimated_elapsed_ms > self.limit.max_elapsed_ms
-        ):
-            return False
-        if (
-            self.limit.max_model_calls is not None
-            and self.model_calls + model_calls > self.limit.max_model_calls
-        ):
-            return False
-        if (
-            self.limit.max_tool_calls is not None
-            and self.tool_calls + tool_calls > self.limit.max_tool_calls
-        ):
-            return False
+        if self.limit.max_cost_usd is not None:
+            if self.spent_cost_usd + estimated_cost_usd > self.limit.max_cost_usd:
+                return False
+        if self.limit.max_elapsed_ms is not None:
+            if self.elapsed_ms + estimated_elapsed_ms > self.limit.max_elapsed_ms:
+                return False
+        if self.limit.max_model_calls is not None:
+            if self.model_calls + model_calls > self.limit.max_model_calls:
+                return False
+        if self.limit.max_tool_calls is not None:
+            if self.tool_calls + tool_calls > self.limit.max_tool_calls:
+                return False
         return True
 
 
@@ -224,14 +239,42 @@ class CapabilityDescriptor:
     estimated_model_calls: int = 0
     estimated_tool_calls: int = 1
     idempotent: bool = False
+    idempotency_key_field: str | None = None
     risk_class: RiskLevel = RiskLevel.LOW
+
+    def __post_init__(self) -> None:
+        if self.idempotency_key_field is not None and not self.idempotent:
+            raise ValueError("idempotency_key_field requires idempotent=True")
+        if any(
+            value < 0
+            for value in (
+                self.estimated_cost_usd,
+                self.estimated_elapsed_ms,
+                self.estimated_model_calls,
+                self.estimated_tool_calls,
+            )
+        ):
+            raise ValueError("capability resource estimates must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
 class CapabilityResult:
     output: Any
     actual_cost_usd: float = 0.0
+    actual_elapsed_ms: int | None = None
+    actual_model_calls: int | None = None
+    actual_tool_calls: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        values = (
+            self.actual_cost_usd,
+            self.actual_elapsed_ms,
+            self.actual_model_calls,
+            self.actual_tool_calls,
+        )
+        if any(value is not None and value < 0 for value in values):
+            raise ValueError("actual capability usage must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)

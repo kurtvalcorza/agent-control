@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import deque
 
 from .models import Plan
@@ -9,12 +10,20 @@ class InvalidPlan(ValueError):
     pass
 
 
+_CANONICAL_NODE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+
+
 def validate_plan(plan: Plan, success_criteria: tuple[str, ...]) -> None:
     if not plan.nodes:
         raise InvalidPlan("plan must contain at least one node")
     ids = [node.id for node in plan.nodes]
     if len(ids) != len(set(ids)):
         raise InvalidPlan("plan node ids must be unique")
+    for node_id in ids:
+        if not _CANONICAL_NODE_ID.fullmatch(node_id):
+            raise InvalidPlan(
+                f"plan node id {node_id!r} is not canonical; use 1-128 alphanumeric/._:- characters"
+            )
     nodes = {node.id: node for node in plan.nodes}
     for node in plan.nodes:
         if not node.objective.strip():

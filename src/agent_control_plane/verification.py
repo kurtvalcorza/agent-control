@@ -16,7 +16,16 @@ VerifierFunction = Callable[[VerificationSpec, Any, dict[str, Any]], Verificatio
 
 
 class VerifierRegistry:
-    """Provider-neutral verifier registry with fail-closed missing-verifier behavior."""
+    """Provider-neutral verifier registry with fail-closed composite verification."""
+
+    _STATUS_PRECEDENCE: tuple[VerificationStatus, ...] = (
+        VerificationStatus.FAIL,
+        VerificationStatus.BLOCKED,
+        VerificationStatus.REPLAN,
+        VerificationStatus.RETRY,
+        VerificationStatus.INCONCLUSIVE,
+        VerificationStatus.PASS,
+    )
 
     def __init__(self) -> None:
         self._verifiers: dict[VerificationKind, VerifierFunction] = {}
@@ -35,14 +44,51 @@ class VerifierRegistry:
         output: Any,
         context: dict[str, Any],
     ) -> VerificationResult:
-        verifier = self._verifiers.get(spec.kind)
-        if verifier is None:
-            return VerificationResult(
-                VerificationStatus.BLOCKED,
-                f"no verifier registered for {spec.kind.value}",
-                {"missing_verifier": spec.kind.value, "required": spec.required},
+        results: list[tuple[VerificationKind, VerificationResult]] = []
+        for kind in spec.kinds:
+            verifier = self._verifiers.get(kind)
+            single_spec = VerificationSpec(
+                kind=kind,
+                criteria=spec.criteria,
+                required=spec.required,
             )
-        return verifier(spec, output, context)
+            if verifier is None:
+                result = VerificationResult(
+                    VerificationStatus.BLOCKED,
+                    f"no verifier registered for {kind.value}",
+                    {"missing_verifier": kind.value, "required": spec.required},
+                )
+            else:
+                result = verifier(single_spec, output, context)
+            results.append((kind, result))
+
+        if len(results) == 1:
+            return results[0][1]
+
+        statuses = {result.status for _, result in results}
+        aggregate = next(
+            status for status in self._STATUS_PRECEDENCE if status in statuses
+        )
+        evidence = {
+            "verifiers": {
+                kind.value: {
+                    "status": result.status.value,
+                    "message": result.message,
+                    "evidence": result.evidence,
+                }
+                for kind, result in results
+            }
+        }
+        if aggregate == VerificationStatus.PASS:
+            message = "all required verifiers passed"
+        else:
+            failing = [
+                f"{kind.value}={result.status.value}"
+                for kind, result in results
+                if result.status != VerificationStatus.PASS
+            ]
+            message = "composite verification: " + ", ".join(failing)
+        return VerificationResult(aggregate, message, evidence)
 
     @staticmethod
     def _deterministic(

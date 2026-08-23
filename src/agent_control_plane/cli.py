@@ -11,11 +11,13 @@ import yaml
 from .capabilities import CapabilityRegistry
 from .models import BudgetLimit, Goal, Plan, RiskLevel, Run
 from .policy import PolicyEngine
-from .runtime import ControlPlane, RunBlocked
+from .stable import ControlPlane, RunBlocked
 from .store import SQLiteEventStore
 
 
 class _NoPlanner:
+    model_calls_per_plan = 0
+
     def create_plan(self, *, run_id: str, goal: Goal, version: int) -> Plan:
         del run_id, goal, version
         raise RunBlocked("standalone CLI has no planner configured")
@@ -31,6 +33,8 @@ def _jsonable(value: Any) -> Any:
     if hasattr(value, "__dataclass_fields__"):
         return asdict(value)
     if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, tuple):
         return [_jsonable(item) for item in value]
     return value
 
@@ -103,6 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile.add_argument("--artifact-ref", action="append", default=[])
     reconcile.add_argument("--precondition-ref", action="append", default=[])
 
+    verification = groups.add_parser("verification").add_subparsers(
+        dest="command", required=True
+    )
+    reverify = verification.add_parser("retry")
+    reverify.add_argument("run_id")
+    reverify.add_argument("node_id")
+
     checkpoint = groups.add_parser("checkpoint").add_subparsers(
         dest="command", required=True
     )
@@ -123,6 +134,9 @@ def build_parser() -> argparse.ArgumentParser:
         dest="command", required=True
     )
     capability.add_parser("list")
+    health = capability.add_parser("health")
+    health.add_argument("name", nargs="?")
+
     policy = groups.add_parser("policy").add_subparsers(dest="command", required=True)
     check = policy.add_parser("check")
     check.add_argument("path")
@@ -177,6 +191,8 @@ def main(argv: list[str] | None = None) -> int:
                     artifact_refs=tuple(args.artifact_ref),
                     actual_cost_usd=float(args.cost),
                 )
+        elif args.group == "verification":
+            result = control.reverify_node(args.run_id, args.node_id)
         elif args.group == "checkpoint":
             result = control.list_checkpoints(args.run_id)
         elif args.group == "budget":
@@ -191,13 +207,21 @@ def main(argv: list[str] | None = None) -> int:
                     reason=f"operator {args.command}",
                 )
         elif args.group == "capability":
-            result = registry.list()
+            result = (
+                registry.health(args.name)
+                if args.command == "health"
+                else registry.list()
+            )
         else:
             document = yaml.safe_load(Path(args.path).read_text(encoding="utf-8"))
             if not isinstance(document, dict):
                 raise ValueError("policy document root must be an object")
             engine = PolicyEngine.from_document(document)
-            result = {"valid": True, "rules": [rule.id for rule in engine.rules]}
+            result = {
+                "valid": True,
+                "version": engine.version,
+                "rules": [rule.id for rule in engine.rules],
+            }
         _print(result, args.compact)
         return 0
     except (RunBlocked, ValueError, KeyError) as exc:

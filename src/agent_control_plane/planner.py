@@ -15,6 +15,10 @@ class Planner(Protocol):
 class StaticPlanner:
     """Deterministic planner for tests and hosts that build their own Plan objects."""
 
+    estimated_cost_usd_per_plan = 0.0
+    estimated_elapsed_ms_per_plan = 0
+    model_calls_per_plan = 0
+
     def __init__(self, plan_factory: Callable[[str, Goal, int], Plan]) -> None:
         self._plan_factory = plan_factory
 

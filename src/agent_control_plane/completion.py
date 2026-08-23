@@ -23,7 +23,7 @@ def evaluate_goal_coverage(goal: Goal, plan: Plan) -> GoalCoverage:
         for node in plan.nodes
         for contribution in node.contributes_to
     }
-    expected_outputs = {
+    produced_outputs = {
         output
         for node in plan.nodes
         for output in node.expected_outputs
@@ -32,9 +32,9 @@ def evaluate_goal_coverage(goal: Goal, plan: Plan) -> GoalCoverage:
     outputs = frozenset(goal.requested_outputs)
     return GoalCoverage(
         covered_success_criteria=criteria.intersection(contributions),
-        covered_requested_outputs=outputs.intersection(expected_outputs),
+        covered_requested_outputs=outputs.intersection(produced_outputs),
         missing_success_criteria=criteria.difference(contributions),
-        missing_requested_outputs=outputs.difference(expected_outputs),
+        missing_requested_outputs=outputs.difference(produced_outputs),
     )
 
 
@@ -45,14 +45,10 @@ def require_goal_coverage(goal: Goal, plan: Plan) -> None:
     details: list[str] = []
     if coverage.missing_success_criteria:
         details.append(
-            "missing success criteria: "
-            + ", ".join(sorted(coverage.missing_success_criteria))
+            "missing success criteria: " + ", ".join(sorted(coverage.missing_success_criteria))
         )
     if coverage.missing_requested_outputs:
         details.append(
-            "missing requested outputs: "
-            + ", ".join(sorted(coverage.missing_requested_outputs))
+            "missing requested outputs: " + ", ".join(sorted(coverage.missing_requested_outputs))
         )
-    raise ValueError(
-        "plan does not cover the full goal contract (" + "; ".join(details) + ")"
-    )
+    raise ValueError("plan does not cover the full goal contract (" + "; ".join(details) + ")")
