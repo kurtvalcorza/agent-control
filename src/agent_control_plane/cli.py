@@ -9,17 +9,19 @@ from typing import Any, NoReturn
 import yaml
 
 from .capabilities import CapabilityRegistry
-from .models import BudgetLimit, Goal, RiskLevel
+from .models import BudgetLimit, Goal, Plan, RiskLevel, Run
 from .policy import PolicyEngine
 from .runtime import ControlPlane, RunBlocked
 from .store import SQLiteEventStore
 
 
 class _NoPlanner:
-    def create_plan(self, **_: Any) -> NoReturn:
+    def create_plan(self, *, run_id: str, goal: Goal, version: int) -> Plan:
+        del run_id, goal, version
         raise RunBlocked("standalone CLI has no planner configured")
 
-    def revise_plan(self, **_: Any) -> NoReturn:
+    def revise_plan(self, *, run: Run, reason: str, version: int) -> Plan:
+        del run, reason, version
         raise RunBlocked("standalone CLI has no planner configured")
 
 
@@ -38,7 +40,7 @@ def _print(value: Any, compact: bool) -> None:
 
 
 def _goal(path: str) -> tuple[Goal, RiskLevel, BudgetLimit]:
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data: dict[str, Any] = json.loads(Path(path).read_text(encoding="utf-8"))
     goal = Goal(
         objective=str(data["objective"]),
         success_criteria=tuple(str(item) for item in data["success_criteria"]),
@@ -47,7 +49,10 @@ def _goal(path: str) -> tuple[Goal, RiskLevel, BudgetLimit]:
         assumptions=tuple(str(item) for item in data.get("assumptions", [])),
     )
     risk = RiskLevel(str(data.get("risk_level", "low")))
-    budget = BudgetLimit(**data.get("budget", {}))
+    raw_budget = data.get("budget", {})
+    if not isinstance(raw_budget, dict):
+        raise ValueError("budget must be an object")
+    budget = BudgetLimit(**raw_budget)
     return goal, risk, budget
 
 
@@ -61,26 +66,28 @@ def build_parser() -> argparse.ArgumentParser:
     create = run.add_parser("create")
     create.add_argument("goal")
     for name in ("inspect", "plan", "step", "execute", "pause", "resume", "cancel"):
-        cmd = run.add_parser(name)
-        cmd.add_argument("run_id")
+        command = run.add_parser(name)
+        command.add_argument("run_id")
 
     gate = groups.add_parser("gate").add_subparsers(dest="command", required=True)
     gate_list = gate.add_parser("list")
     gate_list.add_argument("run_id")
     for name in ("approve", "reject"):
-        cmd = gate.add_parser(name)
-        cmd.add_argument("run_id")
-        cmd.add_argument("gate_id")
+        command = gate.add_parser(name)
+        command.add_argument("run_id")
+        command.add_argument("gate_id")
         if name == "reject":
-            cmd.add_argument("--reason", default="operator rejected")
+            command.add_argument("--reason", default="operator rejected")
 
     for group_name in ("event", "action", "checkpoint"):
-        sub = groups.add_parser(group_name).add_subparsers(dest="command", required=True)
-        cmd = sub.add_parser("list")
-        cmd.add_argument("run_id")
+        subgroup = groups.add_parser(group_name).add_subparsers(dest="command", required=True)
+        command = subgroup.add_parser("list")
+        command.add_argument("run_id")
 
-    cap = groups.add_parser("capability").add_subparsers(dest="command", required=True)
-    cap.add_parser("list")
+    capability = groups.add_parser("capability").add_subparsers(
+        dest="command", required=True
+    )
+    capability.add_parser("list")
     policy = groups.add_parser("policy").add_subparsers(dest="command", required=True)
     check = policy.add_parser("check")
     check.add_argument("path")
@@ -93,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     registry = CapabilityRegistry()
     control = ControlPlane(store=store, planner=_NoPlanner(), capabilities=registry)
     try:
+        result: Any
         if args.group == "run":
             if args.command == "create":
                 goal, risk, budget = _goal(args.goal)
