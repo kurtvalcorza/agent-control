@@ -39,10 +39,43 @@ class Planner:
         return self.create_plan(run_id=run.id, goal=run.goal, version=version)
 
 
+class CancelPlanner(Planner):
+    def create_plan(self, *, run_id, goal, version):
+        return Plan(
+            id=f"plan_{version}",
+            run_id=run_id,
+            version=version,
+            nodes=(
+                PlanNode(
+                    "write",
+                    "write state",
+                    ("write",),
+                    side_effect_class=SideEffectClass.REVERSIBLE_WRITE,
+                ),
+                PlanNode(
+                    "finish",
+                    "finish later",
+                    ("read",),
+                    dependencies=("write",),
+                    contributes_to=(goal.success_criteria[0],),
+                ),
+            ),
+        )
+
+
 def test_pause_resume_checkpoint_round_trip() -> None:
     registry = CapabilityRegistry()
     registry.register(
-        InProcessCapability(CapabilityDescriptor("write", "1", "test"), lambda _: True)
+        InProcessCapability(
+            CapabilityDescriptor(
+                "write",
+                "1",
+                "test",
+                side_effect_class=SideEffectClass.REVERSIBLE_WRITE,
+                reversible=False,
+            ),
+            lambda _: True,
+        )
     )
     runtime = ControlPlane(
         store=SQLiteEventStore(":memory:"), planner=Planner(), capabilities=registry
@@ -73,6 +106,17 @@ def test_cancel_compensates_verified_reversible_effect() -> None:
             ),
         )
     )
+    registry.register(
+        InProcessCapability(
+            CapabilityDescriptor(
+                "read",
+                "1",
+                "test",
+                side_effect_class=SideEffectClass.NONE,
+            ),
+            lambda _: True,
+        )
+    )
     compensated = []
     compensator = InProcessCompensator(
         lambda run_id, action: (
@@ -82,14 +126,15 @@ def test_cancel_compensates_verified_reversible_effect() -> None:
     )
     runtime = ControlPlane(
         store=SQLiteEventStore(":memory:"),
-        planner=Planner(),
+        planner=CancelPlanner(),
         capabilities=registry,
         compensator=compensator,
     )
     run = runtime.create_run(Goal("write", ("done",)))
-    completed = runtime.run_until_blocked(run.id)
-    assert completed.state == RunState.COMPLETED
-    # Terminal completed runs are intentionally immutable; exercise compensation by
-    # cancelling after the effect in a two-step workflow in higher-level integrations.
+    runtime.plan_run(run.id)
+    after_write = runtime.execute_next(run.id)
+    assert after_write.state == RunState.READY
     assert runtime.list_actions(run.id)[0]["receipt"] is not None
-    assert compensated == []
+    cancelled = runtime.cancel_run(run.id)
+    assert cancelled.state == RunState.CANCELLED
+    assert len(compensated) == 1
