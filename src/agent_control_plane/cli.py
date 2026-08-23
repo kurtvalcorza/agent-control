@@ -4,7 +4,7 @@ import argparse
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
 import yaml
 
@@ -36,7 +36,14 @@ def _jsonable(value: Any) -> Any:
 
 
 def _print(value: Any, compact: bool) -> None:
-    print(json.dumps(_jsonable(value), default=str, indent=None if compact else 2, sort_keys=True))
+    print(
+        json.dumps(
+            _jsonable(value),
+            default=str,
+            indent=None if compact else 2,
+            sort_keys=True,
+        )
+    )
 
 
 def _goal(path: str) -> tuple[Goal, RiskLevel, BudgetLimit]:
@@ -80,15 +87,22 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--reason", default="operator rejected")
 
     for group_name in ("event", "action", "checkpoint"):
-        subgroup = groups.add_parser(group_name).add_subparsers(dest="command", required=True)
+        subgroup = groups.add_parser(group_name).add_subparsers(
+            dest="command",
+            required=True,
+        )
         command = subgroup.add_parser("list")
         command.add_argument("run_id")
 
     capability = groups.add_parser("capability").add_subparsers(
-        dest="command", required=True
+        dest="command",
+        required=True,
     )
     capability.add_parser("list")
-    policy = groups.add_parser("policy").add_subparsers(dest="command", required=True)
+    policy = groups.add_parser("policy").add_subparsers(
+        dest="command",
+        required=True,
+    )
     check = policy.add_parser("check")
     check.add_argument("path")
     return parser
