@@ -1,5 +1,7 @@
 """Public control-plane runtime facade."""
 
+from dataclasses import asdict
+
 from .controller import ControlPlane as _ControlPlane
 from .controller import RunBlocked, RunNotFound
 from .errors import CheckpointInvalid, FailureCategory, FailureRecord
@@ -40,12 +42,18 @@ class ControlPlane(_ControlPlane):
         if run.state != RunState.PLANNING:
             run = self._transition(run, RunState.PLANNING)
         self._append(run.id, EventType.PLAN_REVISION_REQUESTED, {"reason": reason})
-        plan = self.planner.revise_plan(run=run, reason=reason, version=run.plan_version + 1)
+        plan = self.planner.revise_plan(
+            run=run,
+            reason=reason,
+            version=run.plan_version + 1,
+        )
         self._validate_plan_for_runtime(run, plan)
 
         old_nodes = {node.id: node for node in run.plan.nodes} if run.plan else {}
         invalidated = invalidated_nodes or set()
-        invalidated_closure = self._dependent_closure(run, invalidated) if invalidated else set()
+        invalidated_closure = (
+            self._dependent_closure(run, invalidated) if invalidated else set()
+        )
         preserved = sorted(
             node.id
             for node in plan.nodes
@@ -56,7 +64,11 @@ class ControlPlane(_ControlPlane):
         self._append(
             run.id,
             EventType.PLAN_REVISED,
-            {"plan": self._plan_payload(plan), "preserved_completed": preserved, "reason": reason},
+            {
+                "plan": asdict(plan),
+                "preserved_completed": preserved,
+                "reason": reason,
+            },
         )
         return self._transition(self.get_run(run.id), RunState.READY)
 
