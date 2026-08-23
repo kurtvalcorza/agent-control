@@ -11,6 +11,7 @@ from .models import (
     ActionIntent,
     ActionReceipt,
     BudgetLimit,
+    BudgetReservation,
     BudgetState,
     CapabilityDescriptor,
     Checkpoint,
@@ -30,6 +31,7 @@ from .models import (
     VerificationStatus,
 )
 from .planner import StaticPlanner
+from .resources import CallbackResourceVersionProvider, ExternalResourceVersionProvider
 from .runtime import ControlPlane, RunBlocked, RunNotFound
 from .store import SQLiteEventStore
 from .verification import DefaultVerifier, VerifierRegistry
@@ -39,7 +41,9 @@ __all__ = [
     "ActionReceipt",
     "AgentRouterCapability",
     "BudgetLimit",
+    "BudgetReservation",
     "BudgetState",
+    "CallbackResourceVersionProvider",
     "CapabilityDescriptor",
     "CapabilityRegistry",
     "Checkpoint",
@@ -50,6 +54,7 @@ __all__ = [
     "DefaultVerifier",
     "Event",
     "EventType",
+    "ExternalResourceVersionProvider",
     "FailureCategory",
     "FailureRecord",
     "Goal",

@@ -83,26 +83,47 @@ def build_parser() -> argparse.ArgumentParser:
         command = gate.add_parser(name)
         command.add_argument("run_id")
         command.add_argument("gate_id")
-        if name == "reject":
-            command.add_argument("--reason", default="operator rejected")
 
-    for group_name in ("event", "action", "checkpoint"):
-        subgroup = groups.add_parser(group_name).add_subparsers(
-            dest="command",
-            required=True,
-        )
-        command = subgroup.add_parser("list")
+    event = groups.add_parser("event").add_subparsers(dest="command", required=True)
+    event_list = event.add_parser("list")
+    event_list.add_argument("run_id")
+
+    action = groups.add_parser("action").add_subparsers(dest="command", required=True)
+    action_list = action.add_parser("list")
+    action_list.add_argument("run_id")
+    reconcile = action.add_parser("reconcile")
+    reconcile.add_argument("run_id")
+    reconcile.add_argument("intent_id")
+    effect = reconcile.add_mutually_exclusive_group(required=True)
+    effect.add_argument("--occurred", action="store_true")
+    effect.add_argument("--no-effect", action="store_true")
+    reconcile.add_argument("--cost", type=float, default=0.0)
+    reconcile.add_argument("--effect", action="append", default=[])
+    reconcile.add_argument("--rollback-ref")
+    reconcile.add_argument("--artifact-ref", action="append", default=[])
+    reconcile.add_argument("--precondition-ref", action="append", default=[])
+
+    checkpoint = groups.add_parser("checkpoint").add_subparsers(
+        dest="command", required=True
+    )
+    checkpoint_list = checkpoint.add_parser("list")
+    checkpoint_list.add_argument("run_id")
+
+    budget = groups.add_parser("budget").add_subparsers(dest="command", required=True)
+    budget_list = budget.add_parser("list")
+    budget_list.add_argument("run_id")
+    for name in ("consume", "release"):
+        command = budget.add_parser(name)
         command.add_argument("run_id")
+        command.add_argument("reservation_id")
+        if name == "consume":
+            command.add_argument("--cost", type=float, default=0.0)
 
     capability = groups.add_parser("capability").add_subparsers(
-        dest="command",
-        required=True,
+        dest="command", required=True
     )
     capability.add_parser("list")
-    policy = groups.add_parser("policy").add_subparsers(
-        dest="command",
-        required=True,
-    )
+    policy = groups.add_parser("policy").add_subparsers(dest="command", required=True)
     check = policy.add_parser("check")
     check.add_argument("path")
     return parser
@@ -143,9 +164,32 @@ def main(argv: list[str] | None = None) -> int:
         elif args.group == "event":
             result = control.list_events(args.run_id)
         elif args.group == "action":
-            result = control.list_actions(args.run_id)
+            if args.command == "list":
+                result = control.list_actions(args.run_id)
+            else:
+                result = control.reconcile_action(
+                    args.run_id,
+                    args.intent_id,
+                    occurred=bool(args.occurred),
+                    actual_effects=tuple(args.effect),
+                    rollback_ref=args.rollback_ref,
+                    precondition_refs=tuple(args.precondition_ref),
+                    artifact_refs=tuple(args.artifact_ref),
+                    actual_cost_usd=float(args.cost),
+                )
         elif args.group == "checkpoint":
             result = control.list_checkpoints(args.run_id)
+        elif args.group == "budget":
+            if args.command == "list":
+                result = control.list_budget_reservations(args.run_id)
+            else:
+                result = control.resolve_budget_reservation(
+                    args.run_id,
+                    args.reservation_id,
+                    consumed=args.command == "consume",
+                    actual_cost_usd=float(getattr(args, "cost", 0.0)),
+                    reason=f"operator {args.command}",
+                )
         elif args.group == "capability":
             result = registry.list()
         else:

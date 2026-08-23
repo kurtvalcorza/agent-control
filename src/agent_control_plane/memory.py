@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from .models import MemoryItem
 
@@ -33,6 +34,35 @@ class WorkingMemory:
         for item in items:
             self.add(item)
         return len(items)
+
+    def snapshot(self) -> tuple[dict[str, Any], ...]:
+        return tuple(asdict(self._items[item_id]) for item_id in sorted(self._items))
+
+    def snapshot_ref(self) -> str:
+        encoded = json.dumps(
+            self.snapshot(),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+        return "memory:sha256:" + hashlib.sha256(encoded).hexdigest()
+
+    def restore(self, snapshot: tuple[dict[str, Any], ...]) -> None:
+        restored: dict[str, MemoryItem] = {}
+        for raw in snapshot:
+            item = MemoryItem(
+                id=str(raw["id"]),
+                content=raw.get("content"),
+                source=str(raw["source"]),
+                created_at=str(raw["created_at"]),
+                relevance=float(raw.get("relevance", 0.0)),
+                confidence=float(raw.get("confidence", 1.0)),
+                expires_at=(str(raw["expires_at"]) if raw.get("expires_at") else None),
+                supersedes=tuple(str(value) for value in raw.get("supersedes", [])),
+                tags=tuple(str(value) for value in raw.get("tags", [])),
+            )
+            restored[item.id] = item
+        self._items = restored
 
     def select(self, *, limit: int = 20, tags: set[str] | None = None) -> list[MemoryItem]:
         return list(self.select_context(max_items=limit, tags=tags).items)
