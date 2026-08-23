@@ -4,14 +4,14 @@ from .controller import ControlPlane as _ControlPlane
 from .controller import RunBlocked, RunNotFound
 from .errors import CheckpointInvalid
 from .events import EventType
-from .models import RunState
+from .models import Run, RunState
 from .projections import project_run
 
 
 class ControlPlane(_ControlPlane):
     """Public runtime with fail-closed resume checks for started side effects."""
 
-    def resume_run(self, run_id: str):
+    def resume_run(self, run_id: str) -> Run:
         run = self.get_run(run_id)
         if run.state != RunState.PAUSED:
             raise RunBlocked("run is not paused")
