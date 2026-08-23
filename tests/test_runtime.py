@@ -5,6 +5,7 @@ from agent_control_plane import (
     CapabilityDescriptor,
     CapabilityRegistry,
     ControlPlane,
+    EventType,
     Goal,
     InProcessCapability,
     Plan,
@@ -43,7 +44,7 @@ class Planner:
         return self.create_plan(run_id=run.id, goal=run.goal, version=version)
 
 
-def control(handler, *, side_effect=SideEffectClass.NONE, reversible=False, budget=None):
+def control(handler, *, side_effect=SideEffectClass.NONE, reversible=False):
     registry = CapabilityRegistry()
     registry.register(
         InProcessCapability(
@@ -94,6 +95,27 @@ def test_destructive_action_requires_approval_and_executes_once() -> None:
     assert result.state == RunState.COMPLETED
     assert calls == [1]
     assert runtime.list_actions(run.id)[0]["receipt"] is not None
+
+
+def test_reversible_write_intent_precedes_effect() -> None:
+    runtime = control(
+        lambda _: CapabilityResult(
+            output={"verified": True},
+            metadata={"effects": ["changed"], "rollback_ref": "rb_1"},
+        ),
+        side_effect=SideEffectClass.REVERSIBLE_WRITE,
+        reversible=True,
+    )
+    run = runtime.create_run(Goal("mutate", ("done",)))
+    result = runtime.run_until_blocked(run.id)
+    assert result.state == RunState.COMPLETED
+    event_types = [event.type for event in runtime.list_events(run.id)]
+    assert event_types.index(EventType.ACTION_INTENT_CREATED) < event_types.index(
+        EventType.ACTION_STARTED
+    )
+    assert event_types.index(EventType.ACTION_STARTED) < event_types.index(
+        EventType.CAPABILITY_INVOKED
+    )
 
 
 def test_transient_failure_retries_without_replan() -> None:
