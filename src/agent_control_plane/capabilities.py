@@ -4,7 +4,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .models import BudgetState, CapabilityDescriptor, CapabilityResult, SideEffectClass
+from .models import (
+    BudgetState,
+    CapabilityDescriptor,
+    CapabilityResult,
+    RiskLevel,
+    SideEffectClass,
+)
 
 
 class CapabilityError(RuntimeError):
@@ -16,6 +22,10 @@ class CapabilityNotFound(CapabilityError):
 
 
 class CapabilityBudgetExceeded(CapabilityError):
+    pass
+
+
+class CapabilityAuthorizationError(CapabilityError):
     pass
 
 
@@ -45,9 +55,33 @@ class InProcessCapability:
         return CapabilityResult(output=result)
 
 
+_RISK_ORDER = {
+    RiskLevel.LOW: 0,
+    RiskLevel.MEDIUM: 1,
+    RiskLevel.HIGH: 2,
+    RiskLevel.CRITICAL: 3,
+}
+
+
 class CapabilityRegistry:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        granted_permissions: frozenset[str] | None = None,
+        max_risk: RiskLevel = RiskLevel.CRITICAL,
+    ) -> None:
         self._providers: dict[str, list[Capability]] = {}
+        self.granted_permissions = granted_permissions
+        self.max_risk = max_risk
+
+    def set_authorization_context(
+        self,
+        *,
+        granted_permissions: frozenset[str] | None,
+        max_risk: RiskLevel,
+    ) -> None:
+        self.granted_permissions = granted_permissions
+        self.max_risk = max_risk
 
     def register(self, capability: Capability) -> None:
         providers = self._providers.setdefault(capability.descriptor.name, [])
@@ -84,15 +118,45 @@ class CapabilityRegistry:
         budget: BudgetState,
         *,
         side_effect_class: SideEffectClass | None = None,
+        granted_permissions: frozenset[str] | None = None,
+        max_risk: RiskLevel | None = None,
     ) -> Capability:
         providers = self._providers.get(name, [])
         if not providers:
             raise CapabilityNotFound(name)
-        eligible = [
+        class_matches = [
             item
             for item in providers
-            if (side_effect_class is None or item.descriptor.side_effect_class == side_effect_class)
-            and budget.can_spend(
+            if side_effect_class is None
+            or item.descriptor.side_effect_class == side_effect_class
+        ]
+        if not class_matches:
+            raise CapabilityAuthorizationError(
+                f"no provider for {name!r} matches side-effect class"
+            )
+        effective_permissions = (
+            granted_permissions
+            if granted_permissions is not None
+            else self.granted_permissions
+        )
+        effective_max_risk = max_risk if max_risk is not None else self.max_risk
+        authorized = [
+            item
+            for item in class_matches
+            if _RISK_ORDER[item.descriptor.risk_class] <= _RISK_ORDER[effective_max_risk]
+            and (
+                effective_permissions is None
+                or set(item.descriptor.permissions).issubset(effective_permissions)
+            )
+        ]
+        if not authorized:
+            raise CapabilityAuthorizationError(
+                f"no provider for {name!r} fits the permission/risk envelope"
+            )
+        eligible = [
+            item
+            for item in authorized
+            if budget.can_spend(
                 estimated_cost_usd=item.descriptor.estimated_cost_usd,
                 estimated_elapsed_ms=item.descriptor.estimated_elapsed_ms,
                 model_calls=item.descriptor.estimated_model_calls,
@@ -101,4 +165,11 @@ class CapabilityRegistry:
         ]
         if not eligible:
             raise CapabilityBudgetExceeded(name)
-        return min(eligible, key=lambda item: item.descriptor.estimated_cost_usd)
+        return min(
+            eligible,
+            key=lambda item: (
+                item.descriptor.estimated_cost_usd,
+                item.descriptor.estimated_elapsed_ms,
+                item.descriptor.provider_id,
+            ),
+        )
