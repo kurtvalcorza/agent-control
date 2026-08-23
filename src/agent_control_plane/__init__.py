@@ -1,5 +1,6 @@
 """Agent Control Plane public API."""
 
+from .adapters import AgentRouterCapability, MCPCapability, SubprocessCapability
 from .capabilities import CapabilityRegistry, InProcessCapability
 from .compensation import CompensationResult, InProcessCompensator
 from .errors import CheckpointInvalid, FailureCategory, FailureRecord
@@ -28,6 +29,7 @@ from .models import (
     VerificationSpec,
     VerificationStatus,
 )
+from .planner import StaticPlanner
 from .runtime import ControlPlane, RunBlocked, RunNotFound
 from .store import SQLiteEventStore
 from .verification import DefaultVerifier, VerifierRegistry
@@ -35,6 +37,7 @@ from .verification import DefaultVerifier, VerifierRegistry
 __all__ = [
     "ActionIntent",
     "ActionReceipt",
+    "AgentRouterCapability",
     "BudgetLimit",
     "BudgetState",
     "CapabilityDescriptor",
@@ -54,6 +57,7 @@ __all__ = [
     "ImprovementProposal",
     "InProcessCapability",
     "InProcessCompensator",
+    "MCPCapability",
     "MemoryItem",
     "ObservationClass",
     "PersistentMemoryProvider",
@@ -69,6 +73,8 @@ __all__ = [
     "RunState",
     "SQLiteEventStore",
     "SideEffectClass",
+    "StaticPlanner",
+    "SubprocessCapability",
     "VerificationKind",
     "VerificationResult",
     "VerificationSpec",
