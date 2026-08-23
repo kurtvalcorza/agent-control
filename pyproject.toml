@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-control-plane"
+version = "0.1.0"
+description = "Host-neutral, event-sourced runtime for bounded, recoverable autonomous agent execution."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [{name = "Kurt Valcorza"}]
+dependencies = ["PyYAML>=6.0"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.9",
+  "mypy>=1.14",
+  "types-PyYAML>=6.0",
+]
+
+[project.scripts]
+agent-control-plane = "agent_control_plane.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_control_plane"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["agent_control_plane"]
