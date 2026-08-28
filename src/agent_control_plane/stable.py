@@ -335,10 +335,10 @@ class ControlPlane(RecoveryControlPlane):
 
         for node_id in sorted(affected):
             current = self.get_run(run.id)
-            status = current.node_status.get(node_id)
-            if status is None or status == NodeStatus.INVALIDATED:
+            current_status = current.node_status.get(node_id)
+            if current_status is None or current_status == NodeStatus.INVALIDATED:
                 continue
-            if status == NodeStatus.RUNNING:
+            if current_status == NodeStatus.RUNNING:
                 current = self._set_node(current, node_id, NodeStatus.PENDING)
             self._set_node(current, node_id, NodeStatus.INVALIDATED)
             self._append(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from .events import Event, EventType, SUPPORTED_EVENT_SCHEMA_VERSIONS
+from .events import SUPPORTED_EVENT_SCHEMA_VERSIONS, Event, EventType
 from .models import (
     BudgetLimit,
     BudgetState,
