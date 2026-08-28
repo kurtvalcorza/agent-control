@@ -9,8 +9,8 @@ from typing import Any
 
 from .audit import redact_for_audit, validate_plan_secrets
 from .capabilities import CapabilityRegistry
-from .completion import require_goal_coverage
 from .compensation import Compensator
+from .completion import require_goal_coverage
 from .controller import ControlPlane as _ControlPlane
 from .controller import RunBlocked, RunNotFound
 from .errors import CheckpointInvalid, FailureCategory, FailureRecord

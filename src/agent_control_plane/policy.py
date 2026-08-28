@@ -61,12 +61,13 @@ class PolicyRule:
             return False
         if self.reversible is not None and reversible != self.reversible:
             return False
-        if self.estimated_cost_usd_gt is not None:
-            if estimated_cost_usd <= self.estimated_cost_usd_gt:
-                return False
-        if self.permission_any and not set(self.permission_any).intersection(permissions):
+        if self.estimated_cost_usd_gt is not None and (
+            estimated_cost_usd <= self.estimated_cost_usd_gt
+        ):
             return False
-        return True
+        return not self.permission_any or bool(
+            set(self.permission_any).intersection(permissions)
+        )
 
 
 class PolicyEngine:
@@ -236,7 +237,7 @@ class PolicyEngine:
                     budget_ceiling=tuple(sorted(budget_values.items())),
                 )
             except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError(f"invalid policy rule: {raw!r}") from exc
+                raise ValueError(f"invalid policy rule: {raw!r}: {exc}") from exc
             rules.append(rule)
         if not cls._is_unconditional_allow(rules[-1]):
             raise ValueError("policy document must end with an explicit default allow rule")
