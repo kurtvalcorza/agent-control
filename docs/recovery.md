@@ -103,6 +103,19 @@ FAIL = it is observed absent**; any other status is no evidence either way:
 | `False` | PASS | contradiction: `RunBlocked`, no receipt (prevents a duplicate re-execution) |
 | either | no observer/observation, BLOCKED, INCONCLUSIVE | `RunBlocked`, no receipt |
 
+**The RFC #6 §14 reading (owner ruling 2026-11-19, recorded in Phase B4).** A delegated
+reconciliation without independent evidence writes **no receipt at all**: neither a PASS receipt
+nor a receipt carrying a `BLOCKED` verification. The operator's statement is kept only as an
+`operator_acknowledged` observation, the intent stays open and resume stays blocked, so later
+evidence can still reconcile it. This differs on purpose from the run path, where a
+provider-route attempt whose execution was observed (`CapabilityInvoked`) keeps its receipt
+with a `BLOCKED` verification. The actor route observes no execution and so writes no receipt
+until evidence passes. Covered by
+`tests/test_delegated_verification.py::test_scenario_q_reconciliation_cannot_mint_delegated_pass_without_evidence`,
+`tests/test_observation_resolver.py::test_reconcile_unresolved_reference_blocks_without_receipt`
+and
+`tests/test_actor_route.py::test_actor_reconcile_without_evidence_writes_no_receipt_then_evidence_passes`.
+
 The preferred mechanism gives the verifier the observed state directly. An `ExternalObservation`
 with `state=None` (reference only) is re-fetched by the host-registered `ExternalObservationResolver`
 (`ControlPlane(observation_resolver=...)`, RFC #6 Phase B1), which receives only the reference and
