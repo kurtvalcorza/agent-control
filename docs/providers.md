@@ -230,8 +230,17 @@ takes the provider path whatever its marker says. `ACTOR` requires `delegation_p
 Plan validation does not require a registered provider for an actor-routed node, so a host can
 leave the capability unregistered. An actor-routed node's verification must be `EXTERNAL_STATE`
 alone: the route captures no executor output, so any other kind would have no subject and the
-node is blocked before an intent is created. No policy rule is evaluated on this route, because
-there is no provider descriptor to evaluate and the gate is already unconditional.
+node is blocked before an intent is created.
+
+Policy is evaluated on the actor route before the intent and the gate, using node-level inputs:
+the node's side-effect class, the run risk, `reversible=False`, default capability risk and zero
+estimated cost. DENY, justification, required verification and the other policy checks block
+exactly as on the provider route; REQUIRE_HUMAN is already met by the unconditional gate.
+
+The declared side-effect class is trusted from the plan on this route. There is no provider
+descriptor to cross-check it against, and Phase A contracts carry no effect metadata (RFC #6 §11
+effect annotations are a follow-up). The class is what policy evaluates, what the intent records,
+and what the gate reason shows the approving human.
 
 `agent-relay` is a coordination/handoff protocol, not a capability provider. A relay handoff
 ends at the actor route's gate; `DelegationRoute` has no relay value, and nothing in the runtime

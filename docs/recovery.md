@@ -6,7 +6,9 @@ Every externally visible mutation gets an immutable `ActionIntent` before invoca
 binds authorization to the run, plan version, node, capability, argument digest, side-effect class,
 reversibility and optional compensation metadata.
 
-`ActionStarted` is emitted immediately before invocation. A verified effect produces an
+`ActionStarted` is emitted immediately before the side effect may begin: before provider
+invocation on the provider route, and when the handoff is dispatched (gate approval) on the actor
+route (RFC #6 B3). A verified effect produces an
 `ActionReceipt` with the actual action-start timestamp, completion timestamp, observed effects,
 verification result, precondition references, artifact references and optional rollback reference.
 
@@ -110,7 +112,8 @@ nor a receipt carrying a `BLOCKED` verification. The operator's statement is kep
 evidence can still reconcile it. This differs on purpose from the run path, where a
 provider-route attempt whose execution was observed (`CapabilityInvoked`) keeps its receipt
 with a `BLOCKED` verification. The actor route observes no execution and so writes no receipt
-until evidence passes. Covered by
+until evidence passes. The B1 no-receipt ruling therefore extends to every attempt where no
+execution was observed (no `CapabilityInvoked`), which includes every actor-route attempt. Covered by
 `tests/test_delegated_verification.py::test_scenario_q_reconciliation_cannot_mint_delegated_pass_without_evidence`,
 `tests/test_observation_resolver.py::test_reconcile_unresolved_reference_blocks_without_receipt`
 and
@@ -130,22 +133,38 @@ including the contradiction rows.
 A delegated capability whose contract declares `DelegationRoute.ACTOR` (see
 `docs/providers.md`) never reaches a provider:
 
-1. the `ActionIntent` is recorded first, with `delegated: true`, `authorization_state: pending`
-   and `reversible: false` (there is no provider descriptor, so cancellation never compensates it);
-2. a `HumanGate` opens for that intent, the node is `BLOCKED` and the run pauses. The other agent
-   or session (for example an Agent Relay handoff) does the work outside the runtime;
-3. approving the gate records that the handoff returned. On the next step the action is marked
-   started (`ActionStarted`, no `CapabilityResolved` or `CapabilityInvoked`) and verified only by
-   the independent `EXTERNAL_STATE` path above:
-   - PASS: an authoritative receipt; the node completes;
+1. policy is evaluated on node-level inputs (the node's side-effect class, the run risk and
+   `reversible=False`) and records `PolicyEvaluated`; DENY, justification and required
+   verification block exactly as on the provider route, before any intent or gate exists;
+2. the `ActionIntent` is recorded, with `delegated: true`, `delegation_route: "actor"`,
+   `authorization_state: pending` and `reversible: false` (there is no provider descriptor, so
+   cancellation never compensates it);
+3. a `HumanGate` opens for that intent, the node is `BLOCKED` and the run pauses;
+4. **approval dispatches the handoff.** `approve_gate()` records `ActionAuthorized` and
+   `ActionStarted` together: the other agent or session (for example an Agent Relay handoff) may
+   act from this moment. The run stays paused and the node blocked;
+5. when the handoff returns, `complete_actor_handoff(run_id, intent_id)` verifies it only through
+   the independent `EXTERNAL_STATE` path above (no `CapabilityResolved` or `CapabilityInvoked`):
+   - PASS: an authoritative receipt whose `started_at` is the dispatch time; the node completes;
    - FAIL (the effect is observed absent): the run fails with `VERIFICATION_FAILED`, no receipt;
    - no observer, no observation, BLOCKED or INCONCLUSIVE: no receipt; the node stays `BLOCKED`
      and the run pauses. Resume stays blocked on the started action until `reconcile_action()`
      finds independent evidence, under the reconciliation table above.
 
-Rejection and an unanswered gate behave exactly as for any other `HumanGate`: rejection records
-`ActionRejected` and a `human_rejected` observation and leaves the node blocked, and the runtime
-has no gate timeout, so an undecided gate keeps the run paused until a decision or cancellation.
+**Route binding.** A delegated intent records the route it was created for
+(`ActionIntent.delegation_route`), and the runtime never executes an open intent on another route:
+it blocks the node with a reason naming the bound route. A dispatched actor handoff is verified by
+its binding, not by the host's current pre-resolution. A restart on a host that does have the
+missing facility therefore never invokes a provider for it.
+
+Rejection and an unanswered gate before dispatch behave exactly as for any other `HumanGate`:
+rejection records `ActionRejected` and a `human_rejected` observation and leaves the node blocked,
+with no `ActionStarted`, because nothing was dispatched. The runtime has no gate timeout, so an
+undecided gate keeps the run paused until a decision or cancellation. After dispatch the gate is
+resolved and cannot be rejected; the effect stays started, so it is recorded through
+`complete_actor_handoff()` or `reconcile_action()`. Cancelling a run with a dispatched,
+unreturned handoff records an `unknown_failure` observation and leaves the intent started and
+reconcilable.
 
 ## Process restart
 
