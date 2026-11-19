@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 from .audit import redact_for_audit, validate_plan_secrets
@@ -43,7 +43,9 @@ from .provenance import (
     CapabilityPreResolutionState,
     CapabilitySourceRegistry,
     ExternalObservation,
+    ExternalObservationResolver,
     ExternalStateObserver,
+    ObservationResolution,
     ResolvedCapabilityProvenance,
     RuntimeRequirement,
     SourceCheckStatus,
@@ -72,6 +74,7 @@ class ControlPlane(_ControlPlane):
         capability_sources: CapabilitySourceRegistry | None = None,
         runtime_environment: Iterable[RuntimeRequirement] = (),
         external_observer: ExternalStateObserver | None = None,
+        observation_resolver: ExternalObservationResolver | None = None,
     ) -> None:
         super().__init__(
             store=store,
@@ -89,6 +92,8 @@ class ControlPlane(_ControlPlane):
             RuntimeRequirement(item) for item in runtime_environment
         )
         self.external_observer = external_observer
+        # RFC #6 Scenario P: a separate host resolver re-fetches reference-only observations.
+        self.observation_resolver = observation_resolver
 
     def _append(self, run_id: str, kind: EventType, payload: dict[str, Any]) -> Event:
         if kind == EventType.CAPABILITY_RESOLVED:
@@ -305,14 +310,13 @@ class ControlPlane(_ControlPlane):
                 "no independent external-state observation is available",
                 {"independent_observation": None},
             )
+        resolution: ObservationResolution | None = None
         if observation.state is None:
-            # Phase A supports direct observation only; a reference-only observation needs a
-            # resolver that re-fetches it, which does not exist yet.
-            return VerificationResult(
-                VerificationStatus.BLOCKED,
-                "reference-only external observation is not supported; observed state required",
-                {"independent_observation": observation.reference()},
-            )
+            resolved = self._resolve_observation_reference(observation)
+            if isinstance(resolved, VerificationResult):
+                return resolved
+            resolution = resolved
+            observation = replace(observation, state=resolution.state)
         result = self.verifiers.verify(
             VerificationSpec(
                 VerificationKind.EXTERNAL_STATE, criteria=spec.criteria, required=spec.required
@@ -322,7 +326,45 @@ class ControlPlane(_ControlPlane):
         )
         evidence = dict(result.evidence)
         evidence["independent_observation"] = observation.reference()
+        if resolution is not None:
+            evidence["observation_resolution"] = resolution.to_dict()
         return VerificationResult(result.status, result.message, evidence)
+
+    def _resolve_observation_reference(
+        self, observation: ExternalObservation
+    ) -> ObservationResolution | VerificationResult:
+        """Re-fetch a reference-only observation through the host resolver (RFC #6 Scenario P).
+
+        The resolver receives only the reference, never run context or executor output. Every
+        failure to produce state is ``BLOCKED`` before any verifier sees the observation.
+        """
+
+        reference = observation.reference()
+
+        def blocked(message: str) -> VerificationResult:
+            return VerificationResult(
+                VerificationStatus.BLOCKED,
+                message,
+                {"independent_observation": reference, "observation_resolution": None},
+            )
+
+        resolver = self.observation_resolver
+        if resolver is None:
+            return blocked(
+                "reference-only external observation and no external observation resolver "
+                "is registered"
+            )
+        observer: object = self.external_observer
+        if resolver is observer:
+            # D3: the observer cannot vouch for its own reference.
+            return blocked("external observation resolver must be separate from the observer")
+        try:
+            resolution = resolver.resolve(dict(reference))
+        except Exception as exc:
+            return blocked(f"external observation reference resolution failed: {exc}")
+        if not isinstance(resolution, ObservationResolution) or resolution.state is None:
+            return blocked("external observation reference has no resolved state")
+        return resolution
 
     def _verify_node_output(
         self,

@@ -432,3 +432,49 @@ class CallbackExternalStateObserver:
 
     def observe(self, context: dict[str, Any]) -> ExternalObservation | None:
         return self.handler(context)
+
+
+@dataclass(frozen=True, slots=True)
+class ObservationResolution:
+    """External state re-fetched for an observation reference by a host resolver (RFC #6 P).
+
+    ``method`` records how the reference was resolved (for example ``"crm-api-refetch"``); it is
+    copied into verification evidence next to the reference.
+    """
+
+    state: Any
+    resolver: str
+    resolved_at: str
+    method: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.resolver.strip() or not self.resolved_at.strip() or not self.method.strip():
+            raise ValueError("observation resolution needs resolver, resolved_at and method")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "resolver": self.resolver,
+            "resolved_at": self.resolved_at,
+            "method": self.method,
+        }
+
+
+class ExternalObservationResolver(Protocol):
+    """Host-registered resolver for reference-only observations (``state=None``).
+
+    It is separate from :class:`ExternalStateObserver` and receives only the observation reference
+    (``ExternalObservation.reference()``): never run context and never the delegated executor's
+    output. Because it needs only the reference, a later reconciliation can re-fetch the same one.
+    Returning ``None`` or a resolution without state means the reference could not be resolved.
+    """
+
+    def resolve(self, reference: dict[str, Any]) -> ObservationResolution | None: ...
+
+
+@dataclass(slots=True)
+class CallbackExternalObservationResolver:
+    handler: Callable[[dict[str, Any]], ObservationResolution | None]
+
+    def resolve(self, reference: dict[str, Any]) -> ObservationResolution | None:
+        return self.handler(reference)
