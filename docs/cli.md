@@ -3,8 +3,12 @@
 Global options:
 
 ```bash
-agent-control-plane --db control.sqlite3 --json ...
+agent-control --db control.sqlite3 --json ...
 ```
+
+Upgrading from `agent-control-plane`: the default database is now `control.sqlite3` (it was
+`control-plane.sqlite3`). Without `--db`, the CLI starts a new, empty database and does not see
+earlier runs. Rename the old file, or pass `--db control-plane.sqlite3`.
 
 Commands:
 

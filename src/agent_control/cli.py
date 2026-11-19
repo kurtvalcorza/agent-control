@@ -68,8 +68,8 @@ def _goal(path: str) -> tuple[Goal, RiskLevel, BudgetLimit]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-control-plane")
-    parser.add_argument("--db", default="control-plane.sqlite3")
+    parser = argparse.ArgumentParser(prog="agent-control")
+    parser.add_argument("--db", default="control.sqlite3")
     parser.add_argument("--json", action="store_true", dest="compact")
     groups = parser.add_subparsers(dest="group", required=True)
 

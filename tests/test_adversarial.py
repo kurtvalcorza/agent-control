@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_control_plane import (
+from agent_control import (
     BudgetLimit,
     CapabilityDescriptor,
     CapabilityRegistry,
@@ -19,11 +19,11 @@ from agent_control_plane import (
     VerificationKind,
     VerificationSpec,
 )
-from agent_control_plane.capabilities import CapabilityNotFound, TransientCapabilityError
-from agent_control_plane.events import Event, EventType
-from agent_control_plane.plans import InvalidPlan
-from agent_control_plane.policy import PolicyEngine
-from agent_control_plane.projections import now_iso, validate_event_stream
+from agent_control.capabilities import CapabilityNotFound, TransientCapabilityError
+from agent_control.events import Event, EventType
+from agent_control.plans import InvalidPlan
+from agent_control.policy import PolicyEngine
+from agent_control.projections import now_iso, validate_event_stream
 
 
 class StaticPlanner:

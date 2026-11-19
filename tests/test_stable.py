@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_control_plane import (
+from agent_control import (
     CapabilityDescriptor,
     CapabilityRegistry,
     ControlPlane,
@@ -14,9 +14,9 @@ from agent_control_plane import (
     SideEffectClass,
     SQLiteEventStore,
 )
-from agent_control_plane.events import EventType
-from agent_control_plane.models import CapabilityResult
-from agent_control_plane.policy import PolicyEngine
+from agent_control.events import EventType
+from agent_control.models import CapabilityResult
+from agent_control.policy import PolicyEngine
 
 
 class Planner:

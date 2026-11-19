@@ -1,6 +1,6 @@
-# Agent Control Plane
+# Agent Control
 
-`agent-control-plane` is a host-neutral, event-sourced runtime for bounded, recoverable,
+`agent-control` is a host-neutral, event-sourced runtime for bounded, recoverable,
 goal-directed AI-agent execution.
 
 It does **control semantics**, not domain work. Planners may propose what to do and capability
@@ -11,7 +11,7 @@ verification, recovery, and audit history.
 > The LLM may propose decisions; the runtime owns state transitions, policy enforcement,
 > budgets, action accounting, persistence, and verification semantics.
 
-The implementation follows [Issue #1](https://github.com/kurtvalcorza/agent-control-plane/issues/1).
+The implementation follows [Issue #1](https://github.com/kurtvalcorza/agent-control/issues/1).
 The executable stable-milestone mapping is documented in `docs/acceptance.md`.
 
 ## Implemented stable milestone
@@ -56,7 +56,7 @@ The executable stable-milestone mapping is documented in `docs/acceptance.md`.
                          |
                          v
               +-----------------------+
-              |  agent-control-plane  |
+              |     agent-control     |
               |-----------------------|
               | goal + plan DAG       |
               | deterministic FSM     |
@@ -112,13 +112,17 @@ Create a run from a JSON goal document:
 ```
 
 ```bash
-agent-control-plane --db control.sqlite3 run create goal.json
-agent-control-plane --db control.sqlite3 run inspect RUN_ID
-agent-control-plane --db control.sqlite3 event list RUN_ID
-agent-control-plane --db control.sqlite3 action list RUN_ID
-agent-control-plane --db control.sqlite3 budget list RUN_ID
-agent-control-plane --db control.sqlite3 capability health
+agent-control --db control.sqlite3 run create goal.json
+agent-control --db control.sqlite3 run inspect RUN_ID
+agent-control --db control.sqlite3 event list RUN_ID
+agent-control --db control.sqlite3 action list RUN_ID
+agent-control --db control.sqlite3 budget list RUN_ID
+agent-control --db control.sqlite3 capability health
 ```
+
+Upgrading from `agent-control-plane`: the default database is now `control.sqlite3` (it was
+`control-plane.sqlite3`). Without `--db`, the CLI starts a new, empty database and does not see
+earlier runs. Rename the old file, or pass `--db control-plane.sqlite3`.
 
 The standalone CLI deliberately does not invent an LLM or capability configuration. Planning and
 execution are performed through the Python API or a host integration that registers a `Planner`

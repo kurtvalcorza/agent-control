@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_control_plane import (
+from agent_control import (
     CapabilityDescriptor,
     CapabilityRegistry,
     ControlPlane,
@@ -14,8 +14,8 @@ from agent_control_plane import (
     SQLiteEventStore,
     WorkingMemory,
 )
-from agent_control_plane.models import MemoryItem
-from agent_control_plane.projections import now_iso
+from agent_control.models import MemoryItem
+from agent_control.projections import now_iso
 
 
 class Planner:

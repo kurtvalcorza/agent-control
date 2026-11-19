@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_control_plane import (
+from agent_control import (
     CapabilityDescriptor,
     CapabilityRegistry,
     ControlPlane,
@@ -11,11 +11,11 @@ from agent_control_plane import (
     SideEffectClass,
     SQLiteEventStore,
 )
-from agent_control_plane.control_actions import ControlAction, ObservationPolicy
-from agent_control_plane.events import EventType
-from agent_control_plane.models import CapabilityResult, ObservationClass
-from agent_control_plane.policy import PolicyEngine
-from agent_control_plane.runtime import RunBlocked
+from agent_control.control_actions import ControlAction, ObservationPolicy
+from agent_control.events import EventType
+from agent_control.models import CapabilityResult, ObservationClass
+from agent_control.policy import PolicyEngine
+from agent_control.runtime import RunBlocked
 
 
 class Planner:

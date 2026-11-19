@@ -1,4 +1,4 @@
-from agent_control_plane import (
+from agent_control import (
     CapabilityDescriptor,
     CapabilityRegistry,
     ControlPlane,

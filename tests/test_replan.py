@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_control_plane import (
+from agent_control import (
     CapabilityDescriptor,
     CapabilityRegistry,
     ControlPlane,
@@ -10,7 +10,7 @@ from agent_control_plane import (
     PlanNode,
     SQLiteEventStore,
 )
-from agent_control_plane.models import NodeStatus
+from agent_control.models import NodeStatus
 
 
 class ChangingPlanner:

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from agent_control_plane import (
+from agent_control import (
     CallbackResourceVersionProvider,
     CapabilityDescriptor,
     CapabilityRegistry,
@@ -20,8 +20,8 @@ from agent_control_plane import (
     SQLiteEventStore,
     WorkingMemory,
 )
-from agent_control_plane.events import EventType
-from agent_control_plane.models import CapabilityResult
+from agent_control.events import EventType
+from agent_control.models import CapabilityResult
 
 
 class Planner:

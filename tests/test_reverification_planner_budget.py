@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_control_plane import (
+from agent_control import (
     BudgetLimit,
     CapabilityDescriptor,
     CapabilityRegistry,
