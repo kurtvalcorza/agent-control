@@ -27,6 +27,7 @@ from .models import (
     ObservationClass,
     Plan,
     PlanNode,
+    RiskLevel,
     Run,
     RunState,
     VerificationKind,
@@ -383,8 +384,19 @@ class ControlPlane(_ControlPlane):
         """
 
         capability = node.required_capabilities[0]
+        contract = self._load_capability_contract(run, node)
+        recorded = self._recorded_capability_sources(run.id, plan_version=run.plan_version).get(
+            capability
+        )
+        if contract is None or recorded is None or not ResolvedCapabilityProvenance.from_dict(
+            recorded
+        ).same_identity(contract.provenance):
+            self._block_node_before_invocation(
+                run, node, "actor route contract changed after pre-resolution; replan required"
+            )
+        assert contract is not None
         # The planner's declared side-effect class is the only effect metadata on this route
-        # (the contract carries none, RFC s11); policy and the gate both see it.
+        # (RFC s11); policy and the gate both see it. Undeclared risk is evaluated as CRITICAL.
         subject = _ActorPolicySubject(
             CapabilityDescriptor(
                 capability,
@@ -392,7 +404,12 @@ class ControlPlane(_ControlPlane):
                 "actor-route",
                 side_effect_class=node.side_effect_class,
                 reversible=False,
+                permissions=contract.permissions or (),
+                estimated_cost_usd=contract.estimated_cost_usd or 0.0,
                 estimated_tool_calls=0,
+                risk_class=(
+                    contract.risk_class if contract.risk_class is not None else RiskLevel.CRITICAL
+                ),
             )
         )
         decision = self._policy_decision(run, node.id, subject)
@@ -448,6 +465,8 @@ class ControlPlane(_ControlPlane):
             return super().approve_gate(run_id, gate_id, decided_by=decided_by)
         assert record is not None
         run = self.get_run(run_id)
+        if run.state != RunState.PAUSED:
+            raise RunBlocked("run is not paused")
         if int(record["intent"]["plan_version"]) != run.plan_version:
             raise RunBlocked("stale authorization request")
         checkpoints = self.list_checkpoints(run_id)
@@ -486,7 +505,7 @@ class ControlPlane(_ControlPlane):
         if int(record["intent"]["plan_version"]) != run.plan_version or run.plan is None:
             raise RunBlocked("stale actor handoff")
         if run.state == RunState.PAUSED:
-            run = self.resume_run(run_id)
+            run = self._resume(run_id, completing_intent=intent_id)
         if run.state != RunState.READY:
             raise RunBlocked(f"cannot verify an actor handoff from {run.state.value}")
         node_id = str(record["intent"]["node_id"])
@@ -703,6 +722,26 @@ class ControlPlane(_ControlPlane):
             raise RunBlocked("policy step-cost ceiling exceeded")
         return decision
 
+    def _refuse_replan_with_outstanding_handoff(self, run_id: str) -> None:
+        """A dispatched, unreturned actor handoff pins the plan (RFC #6 B3, B3-R2-2).
+
+        A replan would bump the plan version, orphan the outstanding intent and let a new gate
+        dispatch the same effect again, so the return must be recorded first.
+        """
+
+        for record in self._intent_records(run_id).values():
+            intent_id = str(record["intent"]["id"])
+            if (
+                self._intent_is_actor_bound(record)
+                and record["receipt"] is None
+                and not record["rejected"]
+                and self._intent_started(run_id, intent_id) is not None
+            ):
+                raise RunBlocked(
+                    f"actor handoff {intent_id} is outstanding; record its return with "
+                    "complete_actor_handoff() or reconcile_action() before replanning"
+                )
+
     def request_replan(
         self,
         run_id: str,
@@ -710,6 +749,7 @@ class ControlPlane(_ControlPlane):
         *,
         invalidated_nodes: set[str] | None = None,
     ) -> Run:
+        self._refuse_replan_with_outstanding_handoff(run_id)
         run = self.get_run(run_id)
         limit = run.budget.limit.max_replans
         if limit is not None and run.budget.replans >= limit:
@@ -1247,6 +1287,15 @@ class ControlPlane(_ControlPlane):
             )
 
     def resume_run(self, run_id: str) -> Run:
+        return self._resume(run_id)
+
+    def _resume(self, run_id: str, *, completing_intent: str | None = None) -> Run:
+        """Resume; ``completing_intent`` is the one started actor handoff being returned now.
+
+        Only that intent is exempt from the started-without-receipt check: its return is verified
+        immediately after, so it is not an unresolved effect left behind by the resume.
+        """
+
         run = self.get_run(run_id)
         if run.state != RunState.PAUSED:
             raise RunBlocked("run is not paused")
@@ -1293,7 +1342,7 @@ class ControlPlane(_ControlPlane):
                     raise CheckpointInvalid("checkpoint references unknown action intent")
                 if record["receipt"] is not None or record["rejected"]:
                     continue
-                if intent_id in started:
+                if intent_id in started and intent_id != completing_intent:
                     raise RunBlocked(
                         "unsafe resume: started side effect has no verified receipt"
                     )
@@ -1389,7 +1438,19 @@ class ControlPlane(_ControlPlane):
                     },
                 )
         self._append(run.id, EventType.CANCEL_REQUESTED, {})
-        run = self._transition(run, RunState.CANCELLING)
+        records = self._intent_records(run_id)
+        for gate in self.list_pending_gates(run_id):
+            # Close every pending gate so nothing can be approved (or dispatched) after cancel.
+            self._append(
+                run_id,
+                EventType.HUMAN_GATE_RESOLVED,
+                {"gate_id": gate["id"], "status": "rejected", "decided_by": "runtime:cancel_run"},
+            )
+            requested = gate.get("requested_action")
+            pending = None if requested is None else records.get(str(requested))
+            if pending is not None and not pending["rejected"] and pending["receipt"] is None:
+                self._append(run_id, EventType.ACTION_REJECTED, {"intent_id": str(requested)})
+        run = self._transition(self.get_run(run_id), RunState.CANCELLING)
         compensation_failed = False
         if self.compensator is not None:
             for action in reversed(self.list_actions(run.id)):

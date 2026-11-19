@@ -22,6 +22,8 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Protocol
 
+from .models import RiskLevel
+
 SHA256_ALGORITHM = "sha256"
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _CLAUSE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
@@ -224,11 +226,22 @@ class CapabilityContract:
     clauses: tuple[CapabilityClause, ...] = ()
     delegation_permitted: bool = False
     delegation_route: DelegationRoute = DelegationRoute.PROVIDER
+    # Policy inputs for the actor route, which has no provider descriptor (RFC #6 B3). ``None``
+    # means undeclared: risk is then evaluated as CRITICAL; see docs/providers.md.
+    risk_class: RiskLevel | None = None
+    permissions: tuple[str, ...] | None = None
+    estimated_cost_usd: float | None = None
 
     def __post_init__(self) -> None:
         if self.missing_dependencies and self.closure_complete:
             raise ValueError("closure cannot be complete while dependencies are missing")
         object.__setattr__(self, "delegation_route", DelegationRoute(self.delegation_route))
+        if self.risk_class is not None:
+            object.__setattr__(self, "risk_class", RiskLevel(self.risk_class))
+        if self.permissions is not None:
+            object.__setattr__(self, "permissions", tuple(str(p) for p in self.permissions))
+        if self.estimated_cost_usd is not None and self.estimated_cost_usd < 0:
+            raise ValueError("estimated_cost_usd must be non-negative")
         if self.delegation_route == DelegationRoute.ACTOR and not self.delegation_permitted:
             raise ValueError("an actor delegation route requires delegation_permitted=True")
         ids = [clause.id for clause in self.clauses]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -611,7 +612,9 @@ def test_actor_policy_sees_node_level_inputs() -> None:
     assert seen and seen[-1]["side_effect_class"] == SideEffectClass.REVERSIBLE_WRITE
     assert seen[-1]["reversible"] is False
     assert seen[-1]["run_risk"] == runtime.get_run(run.id).risk_level
-    assert seen[-1]["capability_risk"] == RiskLevel.LOW
+    # Undeclared capability risk is evaluated conservatively (B3-R2-3).
+    assert seen[-1]["capability_risk"] == RiskLevel.CRITICAL
+    assert seen[-1]["permissions"] == ()
 
 
 # --- review round 1: the intent is bound to its route (B3-R1, B3-R3) ---------------------
@@ -763,3 +766,127 @@ def test_restart_with_blocked_actor_verification(tmp_path: Any) -> None:
     assert reconciled.node_status["write"] == NodeStatus.COMPLETED
     assert [r["verification"]["status"] for r in _receipts(restarted, run_id)] == ["pass"]
     assert calls == []
+
+
+# --- review round 2 ----------------------------------------------------------------------
+
+
+def test_actor_approve_refuses_unless_the_run_is_paused() -> None:
+    """B3-R2-1: approval dispatches, so it must not happen outside a paused run."""
+
+    runtime = _runtime([])
+    run_id, gate = _gate_paused(runtime)
+    runtime.resume_run(run_id)  # READY, gate still pending
+    before = len(runtime.list_events(run_id))
+    with pytest.raises(RunBlocked, match="run is not paused"):
+        runtime.approve_gate(run_id, gate["id"])
+    assert len(runtime.list_events(run_id)) == before  # nothing appended
+    assert EventType.ACTION_STARTED not in _types(runtime, run_id)
+
+
+@pytest.mark.parametrize("route", ["actor", "provider"])
+def test_cancel_closes_pending_gates_so_nothing_dispatches_after_cancel(route: str) -> None:
+    calls: list[str] = []
+    runtime = _runtime(calls) if route == "actor" else _provider_gate_runtime(calls)
+    run_id, gate = _gate_paused(runtime)
+    assert runtime.cancel_run(run_id).state == RunState.CANCELLED
+    assert runtime.list_pending_gates(run_id) == []
+    with pytest.raises(RunBlocked, match="not pending"):
+        runtime.approve_gate(run_id, gate["id"])
+    assert EventType.ACTION_STARTED not in _types(runtime, run_id)
+    assert runtime.list_actions(run_id)[0]["receipt"] is None
+    assert EventType.ACTION_REJECTED in _types(runtime, run_id)
+    assert "invoke" not in calls
+
+
+def test_replan_is_refused_while_an_actor_handoff_is_outstanding() -> None:
+    """B3-R2-2: the same effect cannot be dispatched twice; the original return still counts."""
+
+    calls: list[str] = []
+    runtime = _runtime(calls, observer=_observer({"exists": True}))
+    run_id, gate = _gate_paused(runtime)
+    runtime.approve_gate(run_id, gate["id"])
+    for replan in (
+        lambda: runtime.request_replan(run_id, "operator replan"),
+        lambda: runtime.invalidate_and_replan(run_id, "write", "operator replan"),
+    ):
+        with pytest.raises(RunBlocked, match="outstanding"):
+            replan()
+    run = runtime.get_run(run_id)
+    assert run.plan_version == 1
+    assert runtime.list_pending_gates(run_id) == []
+    assert len(runtime.list_actions(run_id)) == 1
+    final = runtime.complete_actor_handoff(run_id, _intent_id(runtime, run_id))
+    assert final.state == RunState.COMPLETED
+    assert [r["verification"]["status"] for r in _receipts(runtime, run_id)] == ["pass"]
+    assert calls == []
+
+
+HIGH = RiskLevel.HIGH
+
+
+def _deny(**match: Any) -> PolicyEngine:
+    return _policy(PolicyRule("deny", PolicyDecisionType.DENY, "denied", **match))
+
+
+@pytest.mark.parametrize(
+    ("contract", "policy", "denied"),
+    [
+        (replace(ACTOR, risk_class=RiskLevel.HIGH), _deny(capability_risk_levels=(HIGH,)), True),
+        (ACTOR, _deny(capability_risk_levels=(RiskLevel.CRITICAL,)), True),
+        (replace(ACTOR, risk_class=RiskLevel.LOW), _deny(capability_risk_levels=(HIGH,)), False),
+        (replace(ACTOR, permissions=("crm:write",)), _deny(permission_any=("crm:write",)), True),
+        (replace(ACTOR, estimated_cost_usd=5.0), _deny(estimated_cost_usd_gt=1.0), True),
+    ],
+    ids=["declared-high", "undeclared-is-critical", "declared-low", "permission", "cost"],
+)
+def test_actor_policy_uses_contract_risk_permissions_and_cost(
+    contract: CapabilityContract, policy: PolicyEngine, denied: bool
+) -> None:
+    """B3-R2-3: capability-risk, permission and cost rules apply on the actor route."""
+
+    runtime = _runtime([], contract=contract, policy=policy)
+    run = runtime.create_run(Goal("delegate", ("done",)))
+    if denied:
+        with pytest.raises(RunBlocked, match="policy denied action"):
+            runtime.execute_next(run.id)
+        assert runtime.list_pending_gates(run.id) == []
+    else:
+        assert runtime.run_until_blocked(run.id).state == RunState.PAUSED
+        assert len(runtime.list_pending_gates(run.id)) == 1
+
+
+def test_complete_actor_handoff_refuses_an_already_resolved_intent() -> None:
+    """B3-R2-4: after a PASS, and after a reconcile on a paused run."""
+
+    passed = _runtime([], observer=_observer({"exists": True}))
+    run_id, gate = _gate_paused(passed)
+    _dispatch_and_return(passed, run_id, gate)
+    with pytest.raises(RunBlocked, match="already resolved"):
+        passed.complete_actor_handoff(run_id, _intent_id(passed, run_id))
+    assert len(_receipts(passed, run_id)) == 1
+
+    reconciled = _runtime([])
+    run_id, gate = _gate_paused(reconciled)
+    assert _dispatch_and_return(reconciled, run_id, gate).state == RunState.PAUSED
+    reconciled.external_observer = _observer({"exists": True})
+    reconciled.reconcile_action(run_id, _intent_id(reconciled, run_id), occurred=True)
+    with pytest.raises(RunBlocked, match="already resolved"):
+        reconciled.complete_actor_handoff(run_id, _intent_id(reconciled, run_id))
+    assert len(_receipts(reconciled, run_id)) == 1
+
+
+def test_checkpoint_during_an_outstanding_handoff_does_not_block_its_return() -> None:
+    """B3-R2-5: a pause_run checkpoint taken mid-handoff still admits that handoff's return."""
+
+    runtime = _runtime([], observer=_observer({"exists": True}))
+    run_id, gate = _gate_paused(runtime)
+    runtime.approve_gate(run_id, gate["id"])
+    runtime.resume_run(run_id)
+    runtime.pause_run(run_id)
+    intent_id = _intent_id(runtime, run_id)
+    assert intent_id in runtime.list_checkpoints(run_id)[-1]["unresolved_action_intents"]
+    with pytest.raises(RunBlocked, match="started side effect"):
+        runtime.resume_run(run_id)  # a plain resume still refuses the started effect
+    assert runtime.complete_actor_handoff(run_id, intent_id).state == RunState.COMPLETED
+    assert [r["verification"]["status"] for r in _receipts(runtime, run_id)] == ["pass"]
