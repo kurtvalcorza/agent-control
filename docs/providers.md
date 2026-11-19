@@ -94,3 +94,61 @@ execution is admitted.
 If execution output is already persisted and verification later becomes available, hosts may call
 `reverify_node()` (or CLI `verification retry`) to verify the same output without invoking the
 capability again.
+
+## Capability sources and pre-resolution (RFC #6 Phase A)
+
+A capability may additionally have a **source**: the portable skill or protocol the provider
+executes. The control plane does not define how such sources are packaged. A host-supplied source
+adapter implements `CapabilitySource` and is registered per capability name in a
+`CapabilitySourceRegistry` passed to `ControlPlane(capability_sources=...)`:
+
+- `load(capability) -> CapabilityContract` returns normalized evidence for the current source
+  snapshot: its `ResolvedCapabilityProvenance`, whether semantic closure is complete (and what is
+  missing), required vs present governance, mandatory `RuntimeRequirement`s, stable
+  `CapabilityClause`s (optional or mandatory, each with its own runtime requirements) and whether
+  execution may be delegated;
+- `check(recorded) -> SourceCheckResult` re-derives the current identity of a recorded source
+  from the source itself (`MATCH` / `MISMATCH` / `UNAVAILABLE`). The runtime compares the returned
+  identity itself; a `MATCH` without a freshly derived identity is treated as `UNAVAILABLE`.
+
+**Adapter obligation (not mechanically enforceable).** `check()` must compute `current` from the
+source as it exists now, for example by re-reading the payload and calling `canonical_digest`.
+The runtime catches the mechanical failures: no `current`, a `current` that differs from the
+recorded identity, and handing back the very object it was given. It cannot tell a checker that
+copies the recorded values into a new object from one that re-derives them. A checker that does
+that silently defeats resume revalidation, so adapter authors own this guarantee.
+
+Digests are `canonical_digest(payload_bytes)`: lowercase hexadecimal SHA-256 over the canonical
+payload bytes the adapter selects (`sha256:<hex>` is available as `provenance.identity`). Untyped,
+upper-case or non-SHA-256 digests are rejected.
+
+The runtime-requirement vocabulary is deliberately small: `FILESYSTEM`, `NETWORK`,
+`LOCAL_PROCESS`, `BROWSER_CONTEXT`, `GPU`, `PERSISTENT_STATE`. There is no `HUMAN_AVAILABLE`;
+human participation stays with `HumanGate` and `VerificationKind.HUMAN`. Hosts declare what they
+provide with `ControlPlane(runtime_environment=...)`; the default is the empty set (fail closed).
+
+Before `CapabilityRegistry.resolve()` the runtime pre-resolves the node's capability and records a
+`CapabilityPreResolved` event (provenance + result):
+
+| State | Meaning | Runtime effect |
+| --- | --- | --- |
+| `SATISFIED` | closure, governance and runtime requirements present locally | continue to normal resolution |
+| `DEGRADED` | only declared optional clauses are unavailable; `dropped_clause_ids` lists them | continue; clause rule below applies |
+| `DELEGATION_REQUIRED` | a mandatory runtime facility is absent locally and delegation is permitted | continue as a delegated commit (see `docs/recovery.md`) |
+| `UNSATISFIED` | closure/governance missing, or a facility is absent and delegation is not permitted | run fails with `CAPABILITY_UNAVAILABLE`; nothing is invoked |
+
+Pre-resolution never decides budget, permissions, risk, policy or provider selection; those remain
+authoritative in the registry and policy engine afterwards.
+
+**Clause rule.** `VerificationSpec.requires_clause_ids` names the clauses a node's verification
+depends on. Before invocation the runtime enforces
+`requires_clause_ids ⊆ satisfied_clause_ids`, where
+`satisfied_clause_ids = declared_clause_ids − dropped_clause_ids`. A dropped *or* undeclared
+(typo, stale, foreign) clause ID marks the node `BLOCKED`. An unsourced capability satisfies no
+clause.
+
+**In-run stability.** Within one plan version a capability's source identity must not change; a
+different identity at a later node records `INPUT_CHANGED` and blocks until an explicit replan.
+
+`agent-relay` is a coordination/handoff protocol, not a capability provider; nothing in the
+runtime registers or invokes it as one.

@@ -47,7 +47,8 @@ A checkpoint records:
 - plan version and budget state;
 - unresolved action intents and budget reservations;
 - working-memory snapshot reference;
-- external-resource version references.
+- external-resource version references;
+- `capability_source_versions`: the latest `ResolvedCapabilityProvenance` per capability.
 
 When working memory is configured, its snapshot is recorded as an event and addressed by content
 digest. `resume_run()` verifies the checkpoint digest, restores the recorded working-memory
@@ -56,6 +57,51 @@ Changed external resources emit `INPUT_CHANGED` and block resume so the run can 
 
 Corrupt checkpoints, missing memory snapshots, started-but-unreceipted actions, and ambiguous
 budget use fail closed.
+
+### Capability source revalidation
+
+Capability source provenance is control-plane-owned state, so its resume check does **not**
+depend on the optional `ExternalResourceVersionProvider`. It runs on **every** resume, with or
+without a checkpoint (a human-gate pause writes none), over the union of the provenance recorded
+in the run's history and the latest checkpoint's `capability_source_versions`. For each one,
+`resume_run()` asks the registered `CapabilitySource` to re-derive the current identity and records
+a `CapabilitySourceChecked` event:
+
+- `MATCH` (identity re-derived and equal) — resume may continue;
+- `MISMATCH` — `INPUT_CHANGED` observation, resume blocks; replan to adopt the new identity;
+- `UNAVAILABLE`, a checker error, a MATCH without a re-derived identity, or **no registered
+  source at all** — resume blocks.
+
+## Delegated commits
+
+When pre-resolution returns `DELEGATION_REQUIRED`, a side-effecting node is a delegated commit:
+
+- its `ActionIntent` is created in the dispatching run before invocation, with `delegated: true`;
+- its verification must include `VerificationKind.EXTERNAL_STATE`, otherwise the node is blocked
+  before invocation;
+- the `EXTERNAL_STATE` verifier's subject is an `ExternalObservation` that the host-supplied
+  `ExternalStateObserver` (`ControlPlane(external_observer=...)`) acquires from run/node/intent
+  context. The executor's output is never passed to it. Other configured kinds still evaluate the
+  executor's output, and the result aggregates fail-closed;
+- no observer, no observation, or a non-PASS external-state result means no authoritative PASS
+  receipt.
+
+`reconcile_action()` keeps its existing behaviour for local actions. For a delegated intent the
+operator's statement is recorded as an acknowledgement only; the runtime acts on independent
+evidence. The `EXTERNAL_STATE` verifier contract is **PASS = the expected effect is observed,
+FAIL = it is observed absent**; any other status is no evidence either way:
+
+| Operator `occurred` | Independent result | Outcome |
+| --- | --- | --- |
+| `True` | PASS | authoritative receipt; node completes |
+| `False` | FAIL (absent) | not-occurred reconciliation receipt; node returns to pending |
+| `True` | FAIL | contradiction: `RunBlocked`, no receipt, node stays blocked |
+| `False` | PASS | contradiction: `RunBlocked`, no receipt (prevents a duplicate re-execution) |
+| either | no observer/observation, BLOCKED, INCONCLUSIVE | `RunBlocked`, no receipt |
+
+Phase A implements the preferred mechanism only: the verifier receives the observed state
+directly. An `ExternalObservation` with `state=None` (reference only) is `BLOCKED` before any
+verifier sees it, because there is no reference resolver yet.
 
 ## Process restart
 

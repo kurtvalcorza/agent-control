@@ -529,8 +529,9 @@ class ControlPlane(RecoveryControlPlane):
             EventType.VERIFICATION_STARTED,
             {"node_id": node_id, "reverification": True},
         )
-        verification = self.verifiers.verify(
-            node.verification,
+        verification = self._verify_node_output(
+            run,
+            node,
             run.node_outputs[node_id],
             {"run_id": run.id, "node_id": node_id, "reverification": True},
         )

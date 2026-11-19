@@ -37,6 +37,26 @@ from .models import (
     VerificationStatus,
 )
 from .planner import StaticPlanner
+from .provenance import (
+    SHA256_ALGORITHM,
+    CallbackCapabilitySource,
+    CallbackExternalStateObserver,
+    CapabilityClause,
+    CapabilityContract,
+    CapabilityPreResolution,
+    CapabilityPreResolutionState,
+    CapabilitySource,
+    CapabilitySourceRegistry,
+    ExternalObservation,
+    ExternalStateObserver,
+    ResolvedCapabilityProvenance,
+    RuntimeRequirement,
+    SourceCheckResult,
+    SourceCheckStatus,
+    canonical_digest,
+    check_capability_source,
+    pre_resolve,
+)
 from .resources import CallbackResourceVersionProvider, ExternalResourceVersionProvider
 from .stable import ControlPlane, RunBlocked, RunNotFound
 from .store import SQLiteEventStore
@@ -97,4 +117,23 @@ __all__ = [
     "VerificationStatus",
     "VerifierRegistry",
     "WorkingMemory",
+    # RFC #6 Phase A: capability provenance and runtime pre-resolution
+    "CallbackCapabilitySource",
+    "CallbackExternalStateObserver",
+    "CapabilityClause",
+    "CapabilityContract",
+    "CapabilityPreResolution",
+    "CapabilityPreResolutionState",
+    "CapabilitySource",
+    "CapabilitySourceRegistry",
+    "ExternalObservation",
+    "ExternalStateObserver",
+    "ResolvedCapabilityProvenance",
+    "RuntimeRequirement",
+    "SHA256_ALGORITHM",
+    "SourceCheckResult",
+    "SourceCheckStatus",
+    "canonical_digest",
+    "check_capability_source",
+    "pre_resolve",
 ]

@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-CURRENT_EVENT_SCHEMA_VERSION = "1"
-SUPPORTED_EVENT_SCHEMA_VERSIONS = frozenset({CURRENT_EVENT_SCHEMA_VERSION})
+# "2" (RFC #6 Phase A) adds CapabilityPreResolved / CapabilitySourceChecked events and additive
+# provenance, delegation and checkpoint fields. Version "1" streams remain replayable.
+CURRENT_EVENT_SCHEMA_VERSION = "2"
+SUPPORTED_EVENT_SCHEMA_VERSIONS = frozenset({"1", CURRENT_EVENT_SCHEMA_VERSION})
 
 
 class EventType(StrEnum):
@@ -26,7 +28,9 @@ class EventType(StrEnum):
     NODE_EXECUTION_FINISHED = "NodeExecutionFinished"
     NODE_COMPLETED = "NodeCompleted"
     NODE_INVALIDATED = "NodeInvalidated"
+    CAPABILITY_PRE_RESOLVED = "CapabilityPreResolved"
     CAPABILITY_RESOLVED = "CapabilityResolved"
+    CAPABILITY_SOURCE_CHECKED = "CapabilitySourceChecked"
     CAPABILITY_INVOKED = "CapabilityInvoked"
     OBSERVATION_RECORDED = "ObservationRecorded"
     VERIFICATION_RECORDED = "VerificationRecorded"

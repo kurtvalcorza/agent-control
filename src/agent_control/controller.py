@@ -25,10 +25,12 @@ from .models import (
     NodeStatus,
     ObservationClass,
     Plan,
+    PlanNode,
     RiskLevel,
     Run,
     RunState,
     SideEffectClass,
+    VerificationResult,
     VerificationStatus,
     is_side_effecting,
 )
@@ -603,8 +605,9 @@ class ControlPlane:
         run = self._transition(self.get_run(run.id), RunState.VERIFYING)
         run = self._set_node(run, node_id, NodeStatus.VERIFYING)
         self._append(run.id, EventType.VERIFICATION_STARTED, {"node_id": node_id})
-        verification = self.verifiers.verify(
-            node.verification,
+        verification = self._verify_node_output(
+            run,
+            node,
             result.output,
             {
                 "run_id": run.id,
@@ -665,6 +668,18 @@ class ControlPlane:
                 node_id=node_id,
             ),
         )
+
+    def _verify_node_output(
+        self,
+        run: Run,
+        node: PlanNode,
+        output: Any,
+        context: dict[str, Any],
+    ) -> VerificationResult:
+        """Verify one node's provider output; recovery layers override for delegated commits."""
+
+        del run
+        return self.verifiers.verify(node.verification, output, context)
 
     def _complete(self, run: Run) -> Run:
         if run.state != RunState.VERIFYING:
