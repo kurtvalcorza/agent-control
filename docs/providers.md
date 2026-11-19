@@ -232,10 +232,21 @@ leave the capability unregistered. An actor-routed node's verification must be `
 alone: the route captures no executor output, so any other kind would have no subject and the
 node is blocked before an intent is created.
 
-Policy is evaluated on the actor route before the intent and the gate, using node-level inputs:
-the node's side-effect class, the run risk, `reversible=False`, default capability risk and zero
-estimated cost. DENY, justification, required verification and the other policy checks block
-exactly as on the provider route; REQUIRE_HUMAN is already met by the unconditional gate.
+Policy is evaluated on the actor route before the intent and the gate. The inputs are the node's
+side-effect class, the run risk, `reversible=False`, and three optional contract fields that stand
+in for the missing provider descriptor:
+
+| Input | Declared on the contract | Undeclared |
+| --- | --- | --- |
+| capability risk | `CapabilityContract.risk_class` | evaluated as `CRITICAL`, the most restrictive level |
+| permissions | `CapabilityContract.permissions` | `()`: `permission_any` rules cannot match |
+| estimated cost | `CapabilityContract.estimated_cost_usd` | `0`: `estimated_cost_usd_gt`, step-cost and budget-ceiling rules cannot match |
+
+A capability-risk rule matches exact levels, so a rule that lists only `HIGH` does not match an
+undeclared risk evaluated as `CRITICAL`. A host that wants to catch undeclared actor capabilities
+lists `CRITICAL` too, or requires contracts to declare `risk_class`. DENY, justification, required
+verification and the other policy checks block exactly as on the provider route; REQUIRE_HUMAN is
+already met by the unconditional gate.
 
 The declared side-effect class is trusted from the plan on this route. There is no provider
 descriptor to cross-check it against, and Phase A contracts carry no effect metadata (RFC #6 §11

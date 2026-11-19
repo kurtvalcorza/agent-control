@@ -37,7 +37,9 @@ replay as the provider route. The actor route emits existing event types whose m
 on the actor route it is emitted when gate approval dispatches the handoff, the moment the other
 agent or session may act, just as the provider route emits it immediately before invocation. The
 actor route emits no `CapabilityResolved`, `CapabilityInvoked` or budget events; no consumer
-depends on `CapabilityResolved` preceding `ActionStarted`.
+depends on `CapabilityResolved` preceding `ActionStarted`. `cancel_run()` now also closes pending
+gates with the existing `HumanGateResolved` (`status: rejected`) and `ActionRejected` events, with
+their existing meanings: the gate was decided against and the intent will not run.
 
 Every persisted event stores its schema version. Replay fails closed when an event uses an
 unsupported version; it never guesses how to interpret an unknown payload.

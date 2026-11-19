@@ -166,6 +166,23 @@ resolved and cannot be rejected; the effect stays started, so it is recorded thr
 unreturned handoff records an `unknown_failure` observation and leaves the intent started and
 reconcilable.
 
+Guards around an outstanding handoff (B3 review round 2):
+
+- `approve_gate()` on an actor gate refuses with "run is not paused" before it records anything,
+  so a handoff is never dispatched from a running, cancelled or finished run;
+- `cancel_run()` closes every pending gate (`HumanGateResolved` with `status: rejected`,
+  `decided_by: runtime:cancel_run`, plus `ActionRejected` for its undispatched intent), so a
+  cancelled run has no approvable gate. This applies to provider gates too;
+- `request_replan()` and `invalidate_and_replan()` refuse while a dispatched actor handoff has no
+  receipt. A replan would bump the plan version, orphan that intent and let a new gate dispatch
+  the same effect again; record the return first. Refusing is the smaller safe option, because
+  carrying the intent across plan versions would need every plan-version check on intents to learn
+  about it;
+- a checkpoint taken while a handoff is outstanding (for example `resume_run()` then
+  `pause_run()`) lists the started intent as unresolved. A plain `resume_run()` still refuses it,
+  but `complete_actor_handoff()` for that same intent is admitted, because its return is verified
+  in the same call. Every other started intent in the checkpoint still blocks.
+
 ## Process restart
 
 SQLite events are authoritative. Reconstruct a `ControlPlane` over the same store and call
