@@ -1,4 +1,4 @@
-"""Agent Control Plane public API."""
+"""Agent Control public API."""
 
 from .adapters import AgentRouterCapability, MCPCapability, SubprocessCapability
 from .capabilities import CapabilityRegistry, InProcessCapability
