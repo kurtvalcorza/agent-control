@@ -1,0 +1,632 @@
+{
+ "events": [
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_fe444682bdfa4ea2838669f72dbfdf42",
+   "occurred_at": "2026-11-19T10:53:56.574604Z",
+   "payload": {
+    "budget_limit": {
+     "max_cost_usd": null,
+     "max_elapsed_ms": null,
+     "max_model_calls": null,
+     "max_replans": null,
+     "max_retries_per_node": 2,
+     "max_tool_calls": null
+    },
+    "goal": {
+     "assumptions": [],
+     "constraints": [],
+     "objective": "g",
+     "requested_outputs": [],
+     "success_criteria": [
+      "done"
+     ]
+    },
+    "policy_profile": "default",
+    "risk_level": "low"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 1,
+   "type": "RunCreated"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_990f57d38bff435faf5b096a6b6712f5",
+   "occurred_at": "2026-11-19T10:53:56.574604Z",
+   "payload": {
+    "goal": {
+     "assumptions": [],
+     "constraints": [],
+     "objective": "g",
+     "requested_outputs": [],
+     "success_criteria": [
+      "done"
+     ]
+    }
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 2,
+   "type": "GoalNormalized"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_5b961c5590094774b8639fde6c5e1312",
+   "occurred_at": "2026-11-19T10:53:56.574604Z",
+   "payload": {
+    "elapsed_ms": 0,
+    "model_calls": 1,
+    "spent_cost_usd": 0.0,
+    "tool_calls": 0
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 3,
+   "type": "BudgetUpdated"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_e54e950dca574f29a75f69e2382d9edb",
+   "occurred_at": "2026-11-19T10:53:56.574604Z",
+   "payload": {
+    "from": "created",
+    "to": "planning"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 4,
+   "type": "StateChanged"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_851d8b2d24934d4585edac451db18f7e",
+   "occurred_at": "2026-11-19T10:53:56.574604Z",
+   "payload": {
+    "version": 1
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 5,
+   "type": "PlanningStarted"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_8a91188658ad4d579c444780e652c406",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "plan": {
+     "id": "p1",
+     "nodes": [
+      {
+       "contributes_to": [
+        "done"
+       ],
+       "dependencies": [],
+       "expected_outputs": [],
+       "id": "a",
+       "inputs": {},
+       "justification": null,
+       "objective": "a",
+       "required_capabilities": [
+        "work"
+       ],
+       "side_effect_class": "none",
+       "verification": {
+        "additional_kinds": [],
+        "criteria": [],
+        "kind": "deterministic",
+        "required": true
+       }
+      },
+      {
+       "contributes_to": [
+        "done"
+       ],
+       "dependencies": [
+        "a"
+       ],
+       "expected_outputs": [],
+       "id": "b",
+       "inputs": {},
+       "justification": null,
+       "objective": "b",
+       "required_capabilities": [
+        "work"
+       ],
+       "side_effect_class": "none",
+       "verification": {
+        "additional_kinds": [],
+        "criteria": [],
+        "kind": "deterministic",
+        "required": true
+       }
+      }
+     ],
+     "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+     "version": 1
+    }
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 6,
+   "type": "PlanProposed"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_d8819fbdda3e40309710d65b20baf9ff",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "plan": {
+     "id": "p1",
+     "nodes": [
+      {
+       "contributes_to": [
+        "done"
+       ],
+       "dependencies": [],
+       "expected_outputs": [],
+       "id": "a",
+       "inputs": {},
+       "justification": null,
+       "objective": "a",
+       "required_capabilities": [
+        "work"
+       ],
+       "side_effect_class": "none",
+       "verification": {
+        "additional_kinds": [],
+        "criteria": [],
+        "kind": "deterministic",
+        "required": true
+       }
+      },
+      {
+       "contributes_to": [
+        "done"
+       ],
+       "dependencies": [
+        "a"
+       ],
+       "expected_outputs": [],
+       "id": "b",
+       "inputs": {},
+       "justification": null,
+       "objective": "b",
+       "required_capabilities": [
+        "work"
+       ],
+       "side_effect_class": "none",
+       "verification": {
+        "additional_kinds": [],
+        "criteria": [],
+        "kind": "deterministic",
+        "required": true
+       }
+      }
+     ],
+     "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+     "version": 1
+    }
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 7,
+   "type": "PlanCreated"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_5c0d15d62d8549d796947a3b6d50fd71",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "plan_id": "p1"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 8,
+   "type": "PlanAccepted"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_273005c316194256af0232f5726f7884",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "from": "planning",
+    "to": "ready"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 9,
+   "type": "StateChanged"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_e3a96364a6e44f2fa328265e7befd60e",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "reservation": {
+     "created_at": "2026-11-19T10:53:56.575609Z",
+     "estimated_cost_usd": 0.0,
+     "estimated_elapsed_ms": 0,
+     "estimated_model_calls": 0,
+     "estimated_tool_calls": 1,
+     "id": "reservation_9665b497dfc84d49bdcbeab8457c0bed",
+     "node_id": "a",
+     "provider_id": "local",
+     "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca"
+    }
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 10,
+   "type": "BudgetReserved"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_22c8faa630d24fe780f069115ea4ba23",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "budget_ceiling": {},
+    "decision": "allow",
+    "justification_required": false,
+    "max_estimated_cost_usd": null,
+    "node_id": "a",
+    "policy_id": "default-allow",
+    "policy_version": "1",
+    "reason": "action permitted",
+    "required_verification": [],
+    "reversible_required": false
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 11,
+   "type": "PolicyEvaluated"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_1ecdbcdcb4db4d32b9608eb13e11d866",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "from": "ready",
+    "to": "executing"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 12,
+   "type": "StateChanged"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_3bf32f45878a46289110a20cbbaeb192",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "node_id": "a",
+    "status": "running"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 13,
+   "type": "NodeStatusChanged"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_842a6536414243408b4566e2e63ec15b",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "capability": "work",
+    "node_id": "a",
+    "provider_id": "local",
+    "selection_reason": "cheapest eligible provider after capability, side-effect, authorization, risk and hard-budget filtering"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 14,
+   "type": "CapabilityResolved"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_061da885020049f69948a508bc17f126",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "node_id": "a",
+    "output": true,
+    "provider_id": "local"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 15,
+   "type": "CapabilityInvoked"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_d4782951ce1e409d9ffe395f15edb3d1",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "elapsed_ms": 0,
+    "model_calls": 1,
+    "spent_cost_usd": 0.0,
+    "tool_calls": 1
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 16,
+   "type": "BudgetUpdated"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_5171a77ae6f045ea87f58a49b95f481f",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "from": "executing",
+    "to": "verifying"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 17,
+   "type": "StateChanged"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_6b9acc4ac2a341f6932ca2d8a4feb159",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "node_id": "a",
+    "status": "verifying"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 18,
+   "type": "NodeStatusChanged"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_821815ebf6ea4429a7978db80c0cd75b",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "node_id": "a"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 19,
+   "type": "VerificationStarted"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_a5cda15bd21647cd89cfb4417327e812",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "node_id": "a",
+    "result": {
+     "evidence": {},
+     "message": "deterministic predicate passed",
+     "status": "pass"
+    }
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 20,
+   "type": "VerificationFinished"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_b2623a13dd2e4c2a985c3e9d4a0ccb67",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "node_id": "a",
+    "result": {
+     "evidence": {},
+     "message": "deterministic predicate passed",
+     "status": "pass"
+    }
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 21,
+   "type": "VerificationRecorded"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_72e020fc107f454a87e8293810a770b9",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "node_id": "a",
+    "status": "completed"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 22,
+   "type": "NodeStatusChanged"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_0c26e0b3e44e4353b56af886b6bd310d",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "node_id": "a"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 23,
+   "type": "NodeCompleted"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_d2355137b0d343ac9288a533f2a3cf60",
+   "occurred_at": "2026-11-19T10:53:56.575609Z",
+   "payload": {
+    "from": "verifying",
+    "to": "ready"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 24,
+   "type": "StateChanged"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_78f56b5f510b466a81c145d2c532be71",
+   "occurred_at": "2026-11-19T10:53:56.579826Z",
+   "payload": {
+    "actual_cost_usd": 0.0,
+    "actual_elapsed_ms": 0,
+    "actual_model_calls": 0,
+    "actual_tool_calls": 1,
+    "reservation_id": "reservation_9665b497dfc84d49bdcbeab8457c0bed"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 25,
+   "type": "BudgetConsumed"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_2a198b5edbbd4e63842c696ba92914c8",
+   "occurred_at": "2026-11-19T10:53:56.579826Z",
+   "payload": {
+    "reason": "operator request"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 26,
+   "type": "PauseRequested"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_97cb1a966e2a4506acc98395752cf237",
+   "occurred_at": "2026-11-19T10:53:56.579826Z",
+   "payload": {
+    "from": "ready",
+    "to": "pausing"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 27,
+   "type": "StateChanged"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_f16566fd8b1a41e9a951b111b5c48e8e",
+   "occurred_at": "2026-11-19T10:53:56.579826Z",
+   "payload": {
+    "checkpoint": {
+     "budget_state": {
+      "elapsed_ms": 0,
+      "limit": {
+       "max_cost_usd": null,
+       "max_elapsed_ms": null,
+       "max_model_calls": null,
+       "max_replans": null,
+       "max_retries_per_node": 2,
+       "max_tool_calls": null
+      },
+      "model_calls": 1,
+      "replans": 0,
+      "spent_cost_usd": 0.0,
+      "tool_calls": 1
+     },
+     "created_at": "2026-11-19T10:53:56.579826Z",
+     "event_sequence": 27,
+     "external_resource_versions": [],
+     "id": "checkpoint_a1cb62b4f7b04d7b9f9851d57b4045d1",
+     "plan_version": 1,
+     "projected_state_digest": "3c5b83e3c42069a85486a1f09cfe7530606567932bf6b38fdd6d660423c57fc9",
+     "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+     "unresolved_action_intents": [],
+     "unresolved_budget_reservations": [],
+     "working_memory_snapshot_ref": null
+    }
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 28,
+   "type": "CheckpointCreated"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_2bd3718135474ad0bb914da8835b07d1",
+   "occurred_at": "2026-11-19T10:53:56.579826Z",
+   "payload": {
+    "from": "pausing",
+    "to": "paused"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 29,
+   "type": "StateChanged"
+  },
+  {
+   "actor": "runtime",
+   "causation_id": null,
+   "correlation_id": null,
+   "id": "evt_fe6757ddf3b74053b261665fa8c8b303",
+   "occurred_at": "2026-11-19T10:53:56.579826Z",
+   "payload": {
+    "reason": "operator request"
+   },
+   "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca",
+   "schema_version": "1",
+   "sequence": 30,
+   "type": "RunPaused"
+  }
+ ],
+ "recorded_from": "origin/main a7d6dc9",
+ "run_id": "run_0b51a48da47848639fc4b5ba44a4fbca"
+}

@@ -82,7 +82,11 @@ def _source(contract: CapabilityContract) -> CapabilitySourceRegistry:
         "write",
         CallbackCapabilitySource(
             lambda _: contract,
-            lambda recorded: SourceCheckResult(SourceCheckStatus.MATCH, current=recorded),
+            lambda recorded: SourceCheckResult(
+                SourceCheckStatus.MATCH, current=ResolvedCapabilityProvenance.from_dict(
+                    contract.provenance.to_dict()
+                )
+            ),
         ),
     )
     return sources

@@ -367,6 +367,11 @@ def check_capability_source(
             SourceCheckStatus.UNAVAILABLE, reason="source checker returned an untyped result"
         )
     if result.status == SourceCheckStatus.MATCH:
+        if result.current is recorded:
+            return SourceCheckResult(
+                SourceCheckStatus.UNAVAILABLE,
+                reason="source checker echoed the recorded provenance instead of re-deriving it",
+            )
         if result.current is None:
             return SourceCheckResult(
                 SourceCheckStatus.UNAVAILABLE,

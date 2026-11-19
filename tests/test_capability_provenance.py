@@ -423,6 +423,7 @@ def test_unsatisfied_pre_resolution_fails_as_capability_unavailable() -> None:
     assert calls == []
     failure = _events(runtime, run.id, EventType.RUN_FAILED)[-1]
     assert failure["failure"]["category"] == "capability_unavailable"
+    assert not _events(runtime, run.id, EventType.BUDGET_RESERVED)
 
 
 def test_scenario_i_dropped_required_clause_blocks_before_invocation() -> None:
@@ -478,6 +479,7 @@ def test_scenario_j_unknown_required_clause_blocks(source: MutableSource | None)
     with pytest.raises(RunBlocked, match="citaton.typo"):
         runtime.execute_next(run.id)
     assert calls == []
+    assert not _events(runtime, run.id, EventType.BUDGET_RESERVED)
 
 
 def test_requires_clause_ids_survive_event_replay() -> None:

@@ -305,6 +305,14 @@ class ControlPlane(_ControlPlane):
                 "no independent external-state observation is available",
                 {"independent_observation": None},
             )
+        if observation.state is None:
+            # Phase A supports direct observation only; a reference-only observation needs a
+            # resolver that re-fetches it, which does not exist yet.
+            return VerificationResult(
+                VerificationStatus.BLOCKED,
+                "reference-only external observation is not supported; observed state required",
+                {"independent_observation": observation.reference()},
+            )
         result = self.verifiers.verify(
             VerificationSpec(
                 VerificationKind.EXTERNAL_STATE, criteria=spec.criteria, required=spec.required
@@ -834,46 +842,82 @@ class ControlPlane(_ControlPlane):
                 "node_id": node_id,
                 "intent_id": intent["id"],
                 "reconciliation": True,
-                "operator_claim_occurred": occurred,
             },
         )
-        if external.status != VerificationStatus.PASS:
-            self._append(
-                run_id,
-                EventType.OBSERVATION_RECORDED,
+        # The EXTERNAL_STATE contract: PASS = the expected effect is observed, FAIL = it is
+        # observed absent. Anything else is no evidence either way.
+        if external.status in {VerificationStatus.PASS, VerificationStatus.FAIL}:
+            observed = external.status == VerificationStatus.PASS
+            if observed != occurred:
+                self._append(
+                    run_id,
+                    EventType.OBSERVATION_RECORDED,
+                    {
+                        "class": ObservationClass.VERIFICATION_FAILURE.value,
+                        "node_id": node_id,
+                        "intent_id": intent["id"],
+                        "detail": "operator reconciliation contradicts independent "
+                        "external-state evidence",
+                        "operator_acknowledged": True,
+                        "operator_claim_occurred": occurred,
+                        "effect_observed": observed,
+                        "external_state": asdict(external),
+                    },
+                )
+                raise RunBlocked(
+                    "operator reconciliation contradicts independent external-state evidence"
+                )
+            return VerificationResult(
+                VerificationStatus.PASS,
+                "operator reconciliation confirmed by independent external-state evidence",
                 {
-                    "class": ObservationClass.VERIFICATION_FAILURE.value,
-                    "node_id": node_id,
-                    "intent_id": intent["id"],
-                    "detail": "delegated reconciliation acknowledged without independent "
-                    "external-state evidence",
-                    "operator_acknowledged": True,
-                    "operator_claim_occurred": occurred,
+                    "operator_reconciled": True,
+                    "occurred": occurred,
+                    "effect_observed": observed,
+                    "delegated_commit": True,
                     "external_state": asdict(external),
                 },
             )
-            raise RunBlocked(
-                "delegated action requires independent external-state evidence to reconcile"
-            )
-        return VerificationResult(
-            VerificationStatus.PASS,
-            "operator reconciliation confirmed by independent external-state evidence",
+        self._append(
+            run_id,
+            EventType.OBSERVATION_RECORDED,
             {
-                "operator_reconciled": True,
-                "occurred": occurred,
-                "delegated_commit": True,
+                "class": ObservationClass.VERIFICATION_FAILURE.value,
+                "node_id": node_id,
+                "intent_id": intent["id"],
+                "detail": "delegated reconciliation acknowledged without independent "
+                "external-state evidence",
+                "operator_acknowledged": True,
+                "operator_claim_occurred": occurred,
                 "external_state": asdict(external),
             },
         )
+        raise RunBlocked(
+            "delegated action requires independent external-state evidence to reconcile"
+        )
 
-    def _revalidate_capability_sources(self, run: Run, checkpoint: dict[str, Any]) -> None:
-        """Unconditional resume-time source revalidation; no host configuration disables it."""
+    def _revalidate_capability_sources(
+        self, run: Run, checkpoint: dict[str, Any] | None
+    ) -> None:
+        """Unconditional resume-time source revalidation; no host configuration disables it.
 
-        raw = checkpoint.get("capability_source_versions", [])
+        Runs on every resume, with or without a checkpoint (a human-gate pause writes none), over
+        the union of the provenance the run recorded and the latest checkpoint's records.
+        """
+
+        raw = list(checkpoint.get("capability_source_versions", [])) if checkpoint else []
         try:
-            recorded = [ResolvedCapabilityProvenance.from_dict(dict(item)) for item in raw]
+            from_checkpoint = [ResolvedCapabilityProvenance.from_dict(dict(item)) for item in raw]
         except (KeyError, TypeError, ValueError) as exc:
             raise CheckpointInvalid("checkpoint capability provenance is malformed") from exc
+        from_history = [
+            ResolvedCapabilityProvenance.from_dict(item)
+            for item in self._recorded_capability_sources(run.id).values()
+        ]
+        recorded: list[ResolvedCapabilityProvenance] = []
+        for candidate in (*from_checkpoint, *from_history):
+            if not any(candidate.same_identity(item) for item in recorded):
+                recorded.append(candidate)
         changed: list[str] = []
         unavailable: list[str] = []
         for item in recorded:
@@ -924,7 +968,6 @@ class ControlPlane(_ControlPlane):
             snapshot_ref = checkpoint.get("working_memory_snapshot_ref")
             if snapshot_ref:
                 self._restore_memory_snapshot(run_id, str(snapshot_ref))
-            self._revalidate_capability_sources(run, checkpoint)
             versions = tuple(
                 str(item) for item in checkpoint.get("external_resource_versions", [])
             )
@@ -982,6 +1025,7 @@ class ControlPlane(_ControlPlane):
                     consumed=False,
                     reason="unused reservation recovered on resume",
                 )
+        self._revalidate_capability_sources(run, checkpoints[-1] if checkpoints else None)
         self._append(run.id, EventType.RESUME_REQUESTED, {})
         target = RunState.READY if run.plan is not None else RunState.PLANNING
         run = self._transition(run, target)
