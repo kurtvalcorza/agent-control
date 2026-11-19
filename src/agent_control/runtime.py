@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import asdict
 from typing import Any
 
@@ -21,16 +22,34 @@ from .models import (
     ActionReceipt,
     BudgetReservation,
     NodeStatus,
+    ObservationClass,
     Plan,
+    PlanNode,
     Run,
     RunState,
+    VerificationKind,
     VerificationResult,
+    VerificationSpec,
     VerificationStatus,
+    is_side_effecting,
 )
 from .planner import Planner
 from .plans import ready_node_ids
 from .policy import PolicyDecision, PolicyEngine
 from .projections import now_iso, project_run
+from .provenance import (
+    CapabilityContract,
+    CapabilityPreResolution,
+    CapabilityPreResolutionState,
+    CapabilitySourceRegistry,
+    ExternalObservation,
+    ExternalStateObserver,
+    ResolvedCapabilityProvenance,
+    RuntimeRequirement,
+    SourceCheckStatus,
+    check_capability_source,
+    pre_resolve,
+)
 from .resources import ExternalResourceVersionProvider
 from .store import SQLiteEventStore
 from .verification import VerifierRegistry
@@ -50,6 +69,9 @@ class ControlPlane(_ControlPlane):
         compensator: Compensator | None = None,
         working_memory: WorkingMemory | None = None,
         resource_versions: ExternalResourceVersionProvider | None = None,
+        capability_sources: CapabilitySourceRegistry | None = None,
+        runtime_environment: Iterable[RuntimeRequirement] = (),
+        external_observer: ExternalStateObserver | None = None,
     ) -> None:
         super().__init__(
             store=store,
@@ -61,9 +83,290 @@ class ControlPlane(_ControlPlane):
         )
         self.working_memory = working_memory
         self.resource_versions = resource_versions
+        self.capability_sources = capability_sources
+        # Fail-closed default: a host that declares nothing provides no runtime facility.
+        self.runtime_environment = frozenset(
+            RuntimeRequirement(item) for item in runtime_environment
+        )
+        self.external_observer = external_observer
 
     def _append(self, run_id: str, kind: EventType, payload: dict[str, Any]) -> Event:
+        if kind == EventType.CAPABILITY_RESOLVED:
+            payload = self._with_resolution_provenance(run_id, payload)
+        elif kind == EventType.ACTION_INTENT_CREATED and "intent" in payload:
+            intent = dict(payload["intent"])
+            intent["delegated"] = bool(intent.get("delegated")) or self._node_is_delegated(
+                run_id, str(intent["node_id"]), int(intent["plan_version"])
+            )
+            payload = {**payload, "intent": intent}
         return super()._append(run_id, kind, redact_for_audit(payload))
+
+    # --- RFC #6 Phase A: provenance and pre-resolution -------------------------------------
+
+    def _pre_resolution_record(
+        self, run_id: str, node_id: str, plan_version: int
+    ) -> dict[str, Any] | None:
+        for event in reversed(self._events(run_id)):
+            if (
+                event.type == EventType.CAPABILITY_PRE_RESOLVED
+                and event.payload.get("node_id") == node_id
+                and int(event.payload.get("plan_version", -1)) == plan_version
+            ):
+                return dict(event.payload)
+        return None
+
+    def _node_is_delegated(self, run_id: str, node_id: str, plan_version: int) -> bool:
+        record = self._pre_resolution_record(run_id, node_id, plan_version)
+        return bool(
+            record is not None
+            and record["pre_resolution"]["state"]
+            == CapabilityPreResolutionState.DELEGATION_REQUIRED.value
+        )
+
+    def _with_resolution_provenance(
+        self, run_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        enriched = dict(payload)
+        record = None
+        node_id = payload.get("node_id")
+        if node_id is not None:
+            run = self.get_run(run_id)
+            record = self._pre_resolution_record(run_id, str(node_id), run.plan_version)
+        enriched["source_provenance"] = None if record is None else record["provenance"]
+        enriched["pre_resolution_state"] = (
+            None if record is None else record["pre_resolution"]["state"]
+        )
+        return enriched
+
+    def _recorded_capability_sources(
+        self, run_id: str, *, plan_version: int | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Latest recorded provenance per capability, optionally for one plan version."""
+
+        recorded: dict[str, dict[str, Any]] = {}
+        for event in self._events(run_id):
+            if event.type != EventType.CAPABILITY_PRE_RESOLVED:
+                continue
+            if plan_version is not None and int(event.payload["plan_version"]) != plan_version:
+                continue
+            provenance = dict(event.payload["provenance"])
+            recorded[str(provenance["capability"])] = provenance
+        return recorded
+
+    def _load_capability_contract(self, run: Run, node: PlanNode) -> CapabilityContract | None:
+        capability = node.required_capabilities[0]
+        source = (
+            self.capability_sources.get(capability)
+            if self.capability_sources is not None
+            else None
+        )
+        if source is None:
+            return None
+        try:
+            contract = source.load(capability)
+            if not isinstance(contract, CapabilityContract) or contract.capability != capability:
+                raise ValueError("source adapter returned a contract for another capability")
+        except Exception as exc:
+            self._append(
+                run.id,
+                EventType.OBSERVATION_RECORDED,
+                {
+                    "class": ObservationClass.CAPABILITY_FAILURE.value,
+                    "node_id": node.id,
+                    "detail": f"capability source could not be loaded: {exc}",
+                },
+            )
+            raise RunBlocked(f"capability source could not be loaded: {capability}") from exc
+        return contract
+
+    def _block_node_before_invocation(self, run: Run, node: PlanNode, detail: str) -> None:
+        self._append(
+            run.id,
+            EventType.OBSERVATION_RECORDED,
+            {
+                "class": ObservationClass.POLICY_BLOCK.value,
+                "node_id": node.id,
+                "detail": detail,
+            },
+        )
+        current = self.get_run(run.id)
+        if current.node_status.get(node.id) in {NodeStatus.PENDING, NodeStatus.READY}:
+            self._set_node(current, node.id, NodeStatus.BLOCKED)
+        raise RunBlocked(detail)
+
+    def _pre_resolve_node(self, run: Run, node: PlanNode) -> Run | None:
+        """Pre-resolution precondition to ``CapabilityRegistry.resolve()``.
+
+        Returns a failed run for ``UNSATISFIED``; raises ``RunBlocked`` for drift, unsatisfied
+        clause dependencies or an unverifiable delegated commit; returns ``None`` to continue.
+        """
+
+        capability = node.required_capabilities[0]
+        required_clauses = node.verification.requires_clause_ids
+        contract = self._load_capability_contract(run, node)
+        if contract is None:
+            if required_clauses:
+                self._block_node_before_invocation(
+                    run,
+                    node,
+                    "verification requires clauses an unsourced capability cannot satisfy: "
+                    + ", ".join(sorted(set(required_clauses))),
+                )
+            return None
+
+        provenance = contract.provenance
+        prior = self._recorded_capability_sources(run.id, plan_version=run.plan_version).get(
+            capability
+        )
+        if prior is not None and not ResolvedCapabilityProvenance.from_dict(prior).same_identity(
+            provenance
+        ):
+            self._append(
+                run.id,
+                EventType.OBSERVATION_RECORDED,
+                {
+                    "class": ObservationClass.INPUT_CHANGED.value,
+                    "node_id": node.id,
+                    "detail": "capability source changed during run",
+                    "capabilities": [capability],
+                    "recorded": prior,
+                    "current": provenance.to_dict(),
+                },
+            )
+            raise RunBlocked("capability source changed during run; replan required")
+
+        resolution: CapabilityPreResolution = pre_resolve(contract, self.runtime_environment)
+        self._append(
+            run.id,
+            EventType.CAPABILITY_PRE_RESOLVED,
+            {
+                "node_id": node.id,
+                "plan_version": run.plan_version,
+                "capability": capability,
+                "provenance": provenance.to_dict(),
+                "pre_resolution": resolution.to_dict(),
+                "required_clause_ids": list(required_clauses),
+            },
+        )
+        if resolution.state == CapabilityPreResolutionState.UNSATISFIED:
+            return self._fail(
+                self.get_run(run.id),
+                FailureRecord(
+                    FailureCategory.CAPABILITY_UNAVAILABLE,
+                    f"capability pre-resolution unsatisfied: {resolution.reason}",
+                    node_id=node.id,
+                ),
+            )
+        missing_clauses = resolution.unsatisfied_clause_ids(required_clauses)
+        if missing_clauses:
+            self._block_node_before_invocation(
+                run,
+                node,
+                "verification requires unsatisfied capability clauses: "
+                + ", ".join(missing_clauses),
+            )
+        if (
+            resolution.state == CapabilityPreResolutionState.DELEGATION_REQUIRED
+            and is_side_effecting(node.side_effect_class)
+            and VerificationKind.EXTERNAL_STATE not in node.verification.kinds
+        ):
+            self._block_node_before_invocation(
+                run,
+                node,
+                "delegated commit requires independent external_state verification",
+            )
+        return None
+
+    def _independent_external_verification(
+        self, spec: VerificationSpec, context: dict[str, Any]
+    ) -> VerificationResult:
+        """EXTERNAL_STATE verification over an observation the dispatching run acquired itself.
+
+        The delegated executor's output is never the subject; it is not even in ``context``.
+        """
+
+        if self.external_observer is None:
+            return VerificationResult(
+                VerificationStatus.BLOCKED,
+                "no independent external-state observer is registered",
+                {"independent_observation": None},
+            )
+        try:
+            observation = self.external_observer.observe(dict(context))
+        except Exception as exc:
+            return VerificationResult(
+                VerificationStatus.BLOCKED,
+                f"independent external-state observation failed: {exc}",
+                {"independent_observation": None},
+            )
+        if not isinstance(observation, ExternalObservation):
+            return VerificationResult(
+                VerificationStatus.BLOCKED,
+                "no independent external-state observation is available",
+                {"independent_observation": None},
+            )
+        result = self.verifiers.verify(
+            VerificationSpec(
+                VerificationKind.EXTERNAL_STATE, criteria=spec.criteria, required=spec.required
+            ),
+            observation,
+            {**context, "independent_observation": True},
+        )
+        evidence = dict(result.evidence)
+        evidence["independent_observation"] = observation.reference()
+        return VerificationResult(result.status, result.message, evidence)
+
+    def _verify_node_output(
+        self,
+        run: Run,
+        node: PlanNode,
+        output: Any,
+        context: dict[str, Any],
+    ) -> VerificationResult:
+        if VerificationKind.EXTERNAL_STATE not in node.verification.kinds or (
+            not self._node_is_delegated(run.id, node.id, run.plan_version)
+        ):
+            return super()._verify_node_output(run, node, output, context)
+        others = tuple(
+            kind for kind in node.verification.kinds if kind != VerificationKind.EXTERNAL_STATE
+        )
+        results: dict[str, VerificationResult] = {}
+        if others:
+            results["executor_output"] = self.verifiers.verify(
+                VerificationSpec(
+                    others[0],
+                    criteria=node.verification.criteria,
+                    required=node.verification.required,
+                    additional_kinds=others[1:],
+                ),
+                output,
+                context,
+            )
+        results[VerificationKind.EXTERNAL_STATE.value] = self._independent_external_verification(
+            node.verification, context
+        )
+        statuses = {item.status for item in results.values()}
+        aggregate = next(
+            status for status in VerifierRegistry._STATUS_PRECEDENCE if status in statuses
+        )
+        message = (
+            "delegated commit verified by independent external-state evidence"
+            if aggregate == VerificationStatus.PASS
+            else "delegated commit lacks passing independent evidence: "
+            + ", ".join(
+                f"{name}={item.status.value}"
+                for name, item in results.items()
+                if item.status != VerificationStatus.PASS
+            )
+        )
+        return VerificationResult(
+            aggregate,
+            message,
+            {
+                "delegated_commit": True,
+                "verifiers": {name: asdict(item) for name, item in results.items()},
+            },
+        )
 
     def _validate_plan_for_runtime(self, run: Run, plan: Plan) -> None:
         validate_plan_secrets(plan)
@@ -261,6 +564,9 @@ class ControlPlane(_ControlPlane):
         if not ready:
             return super().execute_next(run_id)
         node = next(item for item in run.plan.nodes if item.id == ready[0])
+        failed = self._pre_resolve_node(run, node)
+        if failed is not None:
+            return failed
         provider = self.capabilities.resolve(
             node.required_capabilities[0],
             run.budget,
@@ -407,6 +713,9 @@ class ControlPlane(_ControlPlane):
                 self._active_budget_reservations(run.id)
             ),
             "external_resource_versions": list(resource_versions),
+            "capability_source_versions": list(
+                self._recorded_capability_sources(run.id).values()
+            ),
             "created_at": now_iso(),
         }
         self._append(run.id, EventType.CHECKPOINT_CREATED, {"checkpoint": checkpoint})
@@ -463,6 +772,8 @@ class ControlPlane(_ControlPlane):
             "operator reconciled ambiguous external effect",
             {"operator_reconciled": True, "occurred": occurred},
         )
+        if intent.get("delegated"):
+            verification = self._reconcile_delegated(run_id, intent, occurred=occurred)
         receipt = ActionReceipt(
             id=new_id("receipt"),
             intent_id=intent_id,
@@ -499,6 +810,104 @@ class ControlPlane(_ControlPlane):
                 )
         return self.get_run(run_id)
 
+    def _reconcile_delegated(
+        self, run_id: str, intent: dict[str, Any], *, occurred: bool
+    ) -> VerificationResult:
+        """Operator knowledge alone never mints an authoritative delegated PASS (RFC #6 s14)."""
+
+        run = self.get_run(run_id)
+        node_id = str(intent["node_id"])
+        node = (
+            next((item for item in run.plan.nodes if item.id == node_id), None)
+            if run.plan is not None
+            else None
+        )
+        spec = (
+            node.verification
+            if node is not None
+            else VerificationSpec(VerificationKind.EXTERNAL_STATE)
+        )
+        external = self._independent_external_verification(
+            spec,
+            {
+                "run_id": run_id,
+                "node_id": node_id,
+                "intent_id": intent["id"],
+                "reconciliation": True,
+                "operator_claim_occurred": occurred,
+            },
+        )
+        if external.status != VerificationStatus.PASS:
+            self._append(
+                run_id,
+                EventType.OBSERVATION_RECORDED,
+                {
+                    "class": ObservationClass.VERIFICATION_FAILURE.value,
+                    "node_id": node_id,
+                    "intent_id": intent["id"],
+                    "detail": "delegated reconciliation acknowledged without independent "
+                    "external-state evidence",
+                    "operator_acknowledged": True,
+                    "operator_claim_occurred": occurred,
+                    "external_state": asdict(external),
+                },
+            )
+            raise RunBlocked(
+                "delegated action requires independent external-state evidence to reconcile"
+            )
+        return VerificationResult(
+            VerificationStatus.PASS,
+            "operator reconciliation confirmed by independent external-state evidence",
+            {
+                "operator_reconciled": True,
+                "occurred": occurred,
+                "delegated_commit": True,
+                "external_state": asdict(external),
+            },
+        )
+
+    def _revalidate_capability_sources(self, run: Run, checkpoint: dict[str, Any]) -> None:
+        """Unconditional resume-time source revalidation; no host configuration disables it."""
+
+        raw = checkpoint.get("capability_source_versions", [])
+        try:
+            recorded = [ResolvedCapabilityProvenance.from_dict(dict(item)) for item in raw]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CheckpointInvalid("checkpoint capability provenance is malformed") from exc
+        changed: list[str] = []
+        unavailable: list[str] = []
+        for item in recorded:
+            source = (
+                self.capability_sources.get(item.capability)
+                if self.capability_sources is not None
+                else None
+            )
+            result = check_capability_source(source, item)
+            self._append(
+                run.id,
+                EventType.CAPABILITY_SOURCE_CHECKED,
+                {"capability": item.capability, "recorded": item.to_dict(), **result.to_dict()},
+            )
+            if result.status == SourceCheckStatus.MISMATCH:
+                changed.append(item.capability)
+            elif result.status != SourceCheckStatus.MATCH:
+                unavailable.append(item.capability)
+        if changed:
+            self._append(
+                run.id,
+                EventType.OBSERVATION_RECORDED,
+                {
+                    "class": ObservationClass.INPUT_CHANGED.value,
+                    "detail": "capability source changed while paused",
+                    "capabilities": sorted(changed),
+                },
+            )
+            raise RunBlocked("capability source changed while paused; replan required")
+        if unavailable:
+            raise RunBlocked(
+                "capability source cannot be revalidated: " + ", ".join(sorted(unavailable))
+            )
+
     def resume_run(self, run_id: str) -> Run:
         run = self.get_run(run_id)
         if run.state != RunState.PAUSED:
@@ -515,6 +924,7 @@ class ControlPlane(_ControlPlane):
             snapshot_ref = checkpoint.get("working_memory_snapshot_ref")
             if snapshot_ref:
                 self._restore_memory_snapshot(run_id, str(snapshot_ref))
+            self._revalidate_capability_sources(run, checkpoint)
             versions = tuple(
                 str(item) for item in checkpoint.get("external_resource_versions", [])
             )
@@ -603,6 +1013,17 @@ class ControlPlane(_ControlPlane):
             self.working_memory.snapshot_ref() if self.working_memory is not None else None
         )
         result["capability_health"] = self.capabilities.health()
+        events = self._events(run_id)
+        result["capability_pre_resolutions"] = [
+            dict(event.payload)
+            for event in events
+            if event.type == EventType.CAPABILITY_PRE_RESOLVED
+        ]
+        result["capability_source_checks"] = [
+            dict(event.payload)
+            for event in events
+            if event.type == EventType.CAPABILITY_SOURCE_CHECKED
+        ]
         return result
 
     def cancel_run(self, run_id: str) -> Run:

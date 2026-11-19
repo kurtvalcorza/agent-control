@@ -45,6 +45,9 @@ def _plan(payload: dict[str, Any]) -> Plan:
                     VerificationKind(value)
                     for value in node["verification"].get("additional_kinds", [])
                 ),
+                requires_clause_ids=tuple(
+                    str(value) for value in node["verification"].get("requires_clause_ids", [])
+                ),
             ),
             side_effect_class=SideEffectClass(node.get("side_effect_class", "none")),
             expected_outputs=tuple(node.get("expected_outputs", [])),

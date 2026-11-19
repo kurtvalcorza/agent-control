@@ -121,11 +121,17 @@ class VerificationSpec:
     criteria: tuple[str, ...] = ()
     required: bool = True
     additional_kinds: tuple[VerificationKind, ...] = ()
+    # Stable capability clause IDs this verification depends on (RFC #6 section 10). Before
+    # invocation the runtime enforces requires_clause_ids <= satisfied_clause_ids of the resolved
+    # capability; dropped *and* undeclared IDs block the node.
+    requires_clause_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         kinds = (self.kind, *self.additional_kinds)
         if len(kinds) != len(set(kinds)):
             raise ValueError("verification kinds must be unique")
+        if any(not isinstance(item, str) or not item.strip() for item in self.requires_clause_ids):
+            raise ValueError("required clause ids must be non-empty strings")
 
     @property
     def kinds(self) -> tuple[VerificationKind, ...]:
@@ -300,6 +306,9 @@ class ActionIntent:
     reversible: bool
     compensation: dict[str, Any] | None = None
     created_at: str = field(default_factory=_utc_now)
+    # True when the commit is satisfied through delegation (pre-resolution DELEGATION_REQUIRED);
+    # such commits need independent EXTERNAL_STATE evidence before an authoritative receipt.
+    delegated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,6 +349,8 @@ class Checkpoint:
     unresolved_action_intents: tuple[str, ...]
     external_resource_versions: tuple[str, ...] = ()
     created_at: str = field(default_factory=_utc_now)
+    # Recorded ResolvedCapabilityProvenance dicts; revalidated unconditionally on resume.
+    capability_source_versions: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
