@@ -111,6 +111,13 @@ adapter implements `CapabilitySource` and is registered per capability name in a
   from the source itself (`MATCH` / `MISMATCH` / `UNAVAILABLE`). The runtime compares the returned
   identity itself; a `MATCH` without a freshly derived identity is treated as `UNAVAILABLE`.
 
+**Adapter obligation (not mechanically enforceable).** `check()` must compute `current` from the
+source as it exists now, for example by re-reading the payload and calling `canonical_digest`.
+The runtime catches the mechanical failures: no `current`, a `current` that differs from the
+recorded identity, and handing back the very object it was given. It cannot tell a checker that
+copies the recorded values into a new object from one that re-derives them. A checker that does
+that silently defeats resume revalidation, so adapter authors own this guarantee.
+
 Digests are `canonical_digest(payload_bytes)`: lowercase hexadecimal SHA-256 over the canonical
 payload bytes the adapter selects (`sha256:<hex>` is available as `provenance.identity`). Untyped,
 upper-case or non-SHA-256 digests are rejected.

@@ -62,7 +62,10 @@ steps is tracked as an infrastructure blocker, not treated as a passing code gat
 | Per-run `ResolvedCapabilityProvenance` (not on the descriptor) | `provenance.py`, `CapabilityPreResolved`, `CapabilityResolved.source_provenance` | `tests/test_capability_provenance.py` (A) |
 | Canonical SHA-256 identity | `canonical_digest`, typed digest validation | `tests/test_capability_provenance.py` |
 | Checkpointed source identity + unconditional resume revalidation | `capability_source_versions`, `CapabilitySourceChecked` | `tests/test_capability_provenance.py` (B–E) |
-| Small runtime vocabulary, no `HUMAN_AVAILABLE` | `RuntimeRequirement` | `tests/test_capability_provenance.py` (R, vocabulary) |
+| Small runtime vocabulary, no `HUMAN_AVAILABLE` | `RuntimeRequirement` | `tests/test_capability_provenance.py` (vocabulary) |
+| Human absence gates instead of failing pre-resolution | existing `HumanGate` after `SATISFIED` pre-resolution | `tests/test_phase_a_review_fixes.py` (R: sourced irreversible write pauses at a gate, no failure) |
+| Revalidation on every resume, including gate pauses | `_revalidate_capability_sources` over history + checkpoint | `tests/test_phase_a_review_fixes.py` (AC6-R1) |
+| Schema-"1" streams still replay and resume | `SUPPORTED_EVENT_SCHEMA_VERSIONS` | `tests/test_phase_a_review_fixes.py` with `tests/fixtures/schema_v1_paused_run.json` recorded from a7d6dc9 |
 | Pre-resolution precedes registry resolution | `pre_resolve`, `ControlPlane._pre_resolve_node` | `tests/test_capability_provenance.py` (F, G, H, K) |
 | Fail-closed clause subset rule | `VerificationSpec.requires_clause_ids` | `tests/test_capability_provenance.py` (I, J) |
 | Delegated commit verification is independent | `ActionIntent.delegated`, `ExternalStateObserver` | `tests/test_delegated_verification.py` (M, N, O) |
@@ -70,4 +73,5 @@ steps is tracked as an infrastructure blocker, not treated as a passing code gat
 
 Scenario L (an Agent Relay handoff ends at an actor/`HumanGate` boundary) has no executable route in
 Phase A. The runtime registers no relay provider. Scenario P (reference-only observations) is out
-of scope while only the direct-observation mechanism exists.
+of scope while only the direct-observation mechanism exists; reference-only observations
+(`state=None`) are blocked before the verifier (`tests/test_phase_a_review_fixes.py`, AC6-R7).

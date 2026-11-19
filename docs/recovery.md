@@ -61,7 +61,9 @@ budget use fail closed.
 ### Capability source revalidation
 
 Capability source provenance is control-plane-owned state, so its resume check does **not**
-depend on the optional `ExternalResourceVersionProvider`. For every recorded provenance
+depend on the optional `ExternalResourceVersionProvider`. It runs on **every** resume, with or
+without a checkpoint (a human-gate pause writes none), over the union of the provenance recorded
+in the run's history and the latest checkpoint's `capability_source_versions`. For each one,
 `resume_run()` asks the registered `CapabilitySource` to re-derive the current identity and records
 a `CapabilitySourceChecked` event:
 
@@ -85,12 +87,21 @@ When pre-resolution returns `DELEGATION_REQUIRED`, a side-effecting node is a de
   receipt.
 
 `reconcile_action()` keeps its existing behaviour for local actions. For a delegated intent the
-operator's statement is recorded as an acknowledgement only. An authoritative receipt still needs
-an independent `EXTERNAL_STATE` PASS, so until one exists `reconcile_action()` raises
-`RunBlocked` and the node stays blocked. It succeeds once the observer can supply that evidence.
+operator's statement is recorded as an acknowledgement only; the runtime acts on independent
+evidence. The `EXTERNAL_STATE` verifier contract is **PASS = the expected effect is observed,
+FAIL = it is observed absent**; any other status is no evidence either way:
 
-Phase A implements the preferred mechanism only: the verifier receives the observation directly.
-Reference-only evidence that the dispatching run must re-resolve later is not implemented.
+| Operator `occurred` | Independent result | Outcome |
+| --- | --- | --- |
+| `True` | PASS | authoritative receipt; node completes |
+| `False` | FAIL (absent) | not-occurred reconciliation receipt; node returns to pending |
+| `True` | FAIL | contradiction: `RunBlocked`, no receipt, node stays blocked |
+| `False` | PASS | contradiction: `RunBlocked`, no receipt (prevents a duplicate re-execution) |
+| either | no observer/observation, BLOCKED, INCONCLUSIVE | `RunBlocked`, no receipt |
+
+Phase A implements the preferred mechanism only: the verifier receives the observed state
+directly. An `ExternalObservation` with `state=None` (reference only) is `BLOCKED` before any
+verifier sees it, because there is no reference resolver yet.
 
 ## Process restart
 
