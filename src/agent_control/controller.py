@@ -467,15 +467,7 @@ class ControlPlane:
             raise RunBlocked("budget pressure: no eligible provider") from exc
         descriptor = provider.descriptor
         decision = self._policy_decision(run, node_id, provider)
-        if decision.justification_required and not node.justification:
-            raise RunBlocked("policy requires node justification")
-        if (
-            decision.required_verification
-            and node.verification.kind.value not in set(decision.required_verification)
-        ):
-            raise RunBlocked("plan does not satisfy policy-required verification")
-        if decision.decision == PolicyDecisionType.DENY:
-            raise RunBlocked(f"policy denied action: {decision.reason}")
+        self._enforce_policy_decision(node, decision)
 
         record: dict[str, Any] | None = None
         if is_side_effecting(descriptor.side_effect_class):
@@ -635,6 +627,19 @@ class ControlPlane:
             effects=tuple(result.metadata.get("effects", (node.objective,))),
             rollback_ref=result.metadata.get("rollback_ref"),
         )
+
+    def _enforce_policy_decision(self, node: PlanNode, decision: PolicyDecision) -> None:
+        """Justification, required-verification and DENY checks shared by every route."""
+
+        if decision.justification_required and not node.justification:
+            raise RunBlocked("policy requires node justification")
+        if (
+            decision.required_verification
+            and node.verification.kind.value not in set(decision.required_verification)
+        ):
+            raise RunBlocked("plan does not satisfy policy-required verification")
+        if decision.decision == PolicyDecisionType.DENY:
+            raise RunBlocked(f"policy denied action: {decision.reason}")
 
     def _record_verification_outcome(
         self,

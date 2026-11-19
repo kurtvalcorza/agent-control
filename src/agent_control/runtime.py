@@ -22,6 +22,7 @@ from .models import (
     ActionReceipt,
     AuthorizationState,
     BudgetReservation,
+    CapabilityDescriptor,
     NodeStatus,
     ObservationClass,
     Plan,
@@ -105,6 +106,13 @@ class ControlPlane(_ControlPlane):
             intent["delegated"] = bool(intent.get("delegated")) or self._node_is_delegated(
                 run_id, str(intent["node_id"]), int(intent["plan_version"])
             )
+            if intent["delegated"] and not intent.get("delegation_route"):
+                # Bind the intent to the route its pre-resolution chose (RFC #6 B3).
+                record = self._pre_resolution_record(
+                    run_id, str(intent["node_id"]), int(intent["plan_version"])
+                )
+                route = None if record is None else record.get("delegation_route")
+                intent["delegation_route"] = route or DelegationRoute.PROVIDER.value
             payload = {**payload, "intent": intent}
         return super()._append(run_id, kind, redact_for_audit(payload))
 
@@ -139,6 +147,24 @@ class ControlPlane(_ControlPlane):
             and record["pre_resolution"]["state"]
             == CapabilityPreResolutionState.DELEGATION_REQUIRED.value
             and record.get("delegation_route") == DelegationRoute.ACTOR.value
+        )
+
+    @staticmethod
+    def _intent_is_actor_bound(record: dict[str, Any] | None) -> bool:
+        return bool(
+            record is not None
+            and record["intent"].get("delegation_route") == DelegationRoute.ACTOR.value
+        )
+
+    def _intent_started(self, run_id: str, intent_id: str) -> Event | None:
+        return next(
+            (
+                event
+                for event in self._events(run_id)
+                if event.type == EventType.ACTION_STARTED
+                and event.payload.get("intent_id") == intent_id
+            ),
+            None,
         )
 
     def _with_resolution_provenance(
@@ -348,15 +374,37 @@ class ControlPlane(_ControlPlane):
     def _execute_actor_route(self, run: Run, node: PlanNode) -> Run:
         """RFC #6 s12 / Scenario L: delegation that ends at an actor/``HumanGate`` boundary.
 
-        The dispatching run records the ``ActionIntent`` first, then opens a gate and pauses for
-        the other agent or session. Nothing is resolved, invoked or budgeted, and no relay
-        provider exists. Approving the gate records that the handoff returned; the action is then
-        marked started and verified only through the independent ``EXTERNAL_STATE`` path (s13),
-        so an approval alone never mints a PASS receipt.
+        Policy is evaluated first, on node-level inputs, exactly as on the provider route. The
+        dispatching run then records the ``ActionIntent``, opens a gate and pauses for the other
+        agent or session. Nothing is resolved, invoked or budgeted, and no relay provider exists.
+        Approving the gate dispatches the handoff (``approve_gate`` emits ``ActionStarted``); its
+        return is recorded by :meth:`complete_actor_handoff`, which verifies only through the
+        independent ``EXTERNAL_STATE`` path (s13).
         """
 
         capability = node.required_capabilities[0]
-        record = self._open_intent(run, node.id)
+        # The planner's declared side-effect class is the only effect metadata on this route
+        # (the contract carries none, RFC s11); policy and the gate both see it.
+        subject = _ActorPolicySubject(
+            CapabilityDescriptor(
+                capability,
+                "actor-route",
+                "actor-route",
+                side_effect_class=node.side_effect_class,
+                reversible=False,
+                estimated_tool_calls=0,
+            )
+        )
+        decision = self._policy_decision(run, node.id, subject)
+        self._enforce_policy_decision(node, decision)
+        record = self._open_intent(self.get_run(run.id), node.id)
+        if record is not None and record["authorized"]:
+            self._block_node_before_invocation(
+                run,
+                node,
+                "actor handoff already dispatched; record its return with "
+                "complete_actor_handoff()",
+            )
         if record is None:
             # No provider descriptor exists on this route: the intent takes the node's declared
             # side-effect class and is conservatively irreversible (never auto-compensated).
@@ -368,28 +416,91 @@ class ControlPlane(_ControlPlane):
                 reversible=False,
                 authorization=AuthorizationState.PENDING,
             )
-        if not record["authorized"]:
-            return self._open_gate(
-                self.get_run(run.id),
-                record,
-                f"actor delegation: hand off {capability!r} to another agent or session; "
-                "approve when the handoff returns (a PASS receipt still needs independent "
-                "external-state evidence)",
-            )
-        intent_id = str(record["intent"]["id"])
-        current = self._transition(self.get_run(run.id), RunState.EXECUTING)
-        current = self._set_node(current, node.id, NodeStatus.RUNNING)
-        self._append(
-            current.id, EventType.ACTION_STARTED, {"intent_id": intent_id, "node_id": node.id}
+        return self._open_gate(
+            self.get_run(run.id),
+            record,
+            f"actor delegation: approve to dispatch {capability!r} "
+            f"({node.side_effect_class.value}) to another agent or session; a PASS receipt "
+            "still needs independent external-state evidence when the handoff returns",
         )
-        current = self._transition(self.get_run(current.id), RunState.VERIFYING)
-        current = self._set_node(current, node.id, NodeStatus.VERIFYING)
-        self._append(current.id, EventType.VERIFICATION_STARTED, {"node_id": node.id})
-        verification = self._verify_node_output(
-            current,
+
+    def approve_gate(
+        self,
+        run_id: str,
+        gate_id: str,
+        *,
+        decided_by: str = "operator",
+    ) -> Run:
+        """Approve a gate; an actor-route approval *dispatches* the handoff (RFC #6 B3).
+
+        For an actor-bound intent the approval is recorded with ``ActionAuthorized`` and
+        ``ActionStarted`` at the same moment: the side effect may begin now. The run stays paused
+        and the node blocked until :meth:`complete_actor_handoff` records the return. Provider
+        gates keep the existing behaviour.
+        """
+
+        gate = next(
+            (item for item in self.list_pending_gates(run_id) if item["id"] == gate_id), None
+        )
+        requested = None if gate is None else gate.get("requested_action")
+        record = None if requested is None else self._intent_records(run_id).get(str(requested))
+        if gate is None or not self._intent_is_actor_bound(record):
+            return super().approve_gate(run_id, gate_id, decided_by=decided_by)
+        assert record is not None
+        run = self.get_run(run_id)
+        if int(record["intent"]["plan_version"]) != run.plan_version:
+            raise RunBlocked("stale authorization request")
+        checkpoints = self.list_checkpoints(run_id)
+        self._revalidate_capability_sources(run, checkpoints[-1] if checkpoints else None)
+        intent_id = str(record["intent"]["id"])
+        self._append(
+            run_id,
+            EventType.HUMAN_GATE_RESOLVED,
+            {"gate_id": gate_id, "status": "approved", "decided_by": decided_by},
+        )
+        self._append(run_id, EventType.ACTION_AUTHORIZED, {"intent_id": intent_id})
+        self._append(
+            run_id,
+            EventType.ACTION_STARTED,
+            {"intent_id": intent_id, "node_id": str(record["intent"]["node_id"])},
+        )
+        return self.get_run(run_id)
+
+    def complete_actor_handoff(self, run_id: str, intent_id: str) -> Run:
+        """Record that a dispatched actor handoff returned, and verify it independently.
+
+        Verification runs only through the independent ``EXTERNAL_STATE`` path: PASS mints the
+        receipt (``started_at`` is the dispatch time), FAIL fails the run, anything else leaves
+        the node blocked with no receipt and the run paused for reconciliation.
+        """
+
+        record = self._intent_records(run_id).get(intent_id)
+        if not self._intent_is_actor_bound(record):
+            raise RunBlocked("intent is not an actor-route handoff")
+        assert record is not None
+        if record["rejected"] or record["receipt"] is not None:
+            raise RunBlocked("actor handoff is already resolved")
+        if self._intent_started(run_id, intent_id) is None:
+            raise RunBlocked("actor handoff was never dispatched")
+        run = self.get_run(run_id)
+        if int(record["intent"]["plan_version"]) != run.plan_version or run.plan is None:
+            raise RunBlocked("stale actor handoff")
+        if run.state == RunState.PAUSED:
+            run = self.resume_run(run_id)
+        if run.state != RunState.READY:
+            raise RunBlocked(f"cannot verify an actor handoff from {run.state.value}")
+        node_id = str(record["intent"]["node_id"])
+        if run.plan is None:
+            raise RunBlocked("run has no plan")
+        node = next(item for item in run.plan.nodes if item.id == node_id)
+        current = self._transition(run, RunState.VERIFYING)
+        current = self._set_node(current, node_id, NodeStatus.VERIFYING)
+        self._append(current.id, EventType.VERIFICATION_STARTED, {"node_id": node_id})
+        # Bound to the intent, not to this host's current pre-resolution (B3-R1).
+        verification = self._verify_delegated_commit(
             node,
             None,
-            {"run_id": current.id, "node_id": node.id, "intent_id": intent_id},
+            {"run_id": current.id, "node_id": node_id, "intent_id": intent_id},
         )
         return self._record_verification_outcome(
             current,
@@ -497,6 +608,13 @@ class ControlPlane(_ControlPlane):
             not self._node_is_delegated(run.id, node.id, run.plan_version)
         ):
             return super()._verify_node_output(run, node, output, context)
+        return self._verify_delegated_commit(node, output, context)
+
+    def _verify_delegated_commit(
+        self, node: PlanNode, output: Any, context: dict[str, Any]
+    ) -> VerificationResult:
+        """Delegated-commit verification: EXTERNAL_STATE always over an independent observation."""
+
         others = tuple(
             kind for kind in node.verification.kinds if kind != VerificationKind.EXTERNAL_STATE
         )
@@ -739,7 +857,17 @@ class ControlPlane(_ControlPlane):
         failed = self._pre_resolve_node(run, node)
         if failed is not None:
             return failed
-        if self._node_is_actor_routed(run.id, node.id, run.plan_version):
+        actor_routed = self._node_is_actor_routed(run.id, node.id, run.plan_version)
+        open_record = self._open_intent(self.get_run(run.id), node.id)
+        if open_record is not None and self._intent_is_actor_bound(open_record) != actor_routed:
+            bound = "actor" if self._intent_is_actor_bound(open_record) else "provider"
+            self._block_node_before_invocation(
+                run,
+                node,
+                f"action intent {open_record['intent']['id']} is bound to the {bound} route; "
+                "refusing to execute it on another route (reconcile it or replan)",
+            )
+        if actor_routed:
             return self._execute_actor_route(self.get_run(run.id), node)
         provider = self.capabilities.resolve(
             node.required_capabilities[0],
@@ -1240,6 +1368,26 @@ class ControlPlane(_ControlPlane):
         run = self.get_run(run_id)
         if run.state in {RunState.COMPLETED, RunState.FAILED, RunState.CANCELLED}:
             return run
+        for record in self._intent_records(run_id).values():
+            intent_id = str(record["intent"]["id"])
+            if (
+                self._intent_is_actor_bound(record)
+                and record["receipt"] is None
+                and not record["rejected"]
+                and self._intent_started(run_id, intent_id) is not None
+            ):
+                # A dispatched handoff may still act; it stays started and reconcilable.
+                self._append(
+                    run_id,
+                    EventType.OBSERVATION_RECORDED,
+                    {
+                        "class": ObservationClass.UNKNOWN_FAILURE.value,
+                        "node_id": str(record["intent"]["node_id"]),
+                        "intent_id": intent_id,
+                        "detail": "run cancelled with a dispatched actor handoff outstanding; "
+                        "reconcile it with independent evidence",
+                    },
+                )
         self._append(run.id, EventType.CANCEL_REQUESTED, {})
         run = self._transition(run, RunState.CANCELLING)
         compensation_failed = False
@@ -1290,6 +1438,15 @@ class ControlPlane(_ControlPlane):
             },
         )
         return self.get_run(run.id)
+
+
+class _ActorPolicySubject:
+    """Node-level policy subject for the actor route: a descriptor, never a provider."""
+
+    __slots__ = ("descriptor",)
+
+    def __init__(self, descriptor: CapabilityDescriptor) -> None:
+        self.descriptor = descriptor
 
 
 __all__ = ["ControlPlane", "RunBlocked", "RunNotFound"]

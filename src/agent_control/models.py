@@ -309,6 +309,9 @@ class ActionIntent:
     # True when the commit is satisfied through delegation (pre-resolution DELEGATION_REQUIRED);
     # such commits need independent EXTERNAL_STATE evidence before an authoritative receipt.
     delegated: bool = False
+    # RFC #6 B3: the delegation route the intent was created for ("provider" / "actor"); None for
+    # non-delegated intents. An intent is only ever executed on the route it is bound to.
+    delegation_route: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

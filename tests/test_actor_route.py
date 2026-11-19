@@ -36,7 +36,8 @@ from agent_control import (
     VerifierRegistry,
     canonical_digest,
 )
-from agent_control.models import NodeStatus
+from agent_control.models import NodeStatus, RiskLevel
+from agent_control.policy import PolicyDecisionType, PolicyEngine, PolicyRule
 
 PROVENANCE = ResolvedCapabilityProvenance(
     capability="write", source_ref="git:example/skills#write", digest=canonical_digest(b"w")
@@ -139,6 +140,8 @@ def _runtime(
     trip: bool = True,
     register_provider: bool = True,
     runtime_environment: frozenset[RuntimeRequirement] = frozenset(),
+    store: SQLiteEventStore | None = None,
+    policy: PolicyEngine | None = None,
 ) -> ControlPlane:
     registry = TrippedRegistry(calls, trip=trip)
     if register_provider:
@@ -171,9 +174,10 @@ def _runtime(
 
     verifiers.register(VerificationKind.EXTERNAL_STATE, external_state)
     return ControlPlane(
-        store=SQLiteEventStore(":memory:"),
+        store=store if store is not None else SQLiteEventStore(":memory:"),
         planner=Planner(verification, side_effect),
         capabilities=registry,
+        policy=policy,
         verifiers=verifiers,
         capability_sources=_sources(contract),
         runtime_environment=runtime_environment,
@@ -195,6 +199,19 @@ def _pre_resolutions(runtime: ControlPlane, run_id: str) -> list[dict]:
 
 def _receipts(runtime: ControlPlane, run_id: str) -> list[dict]:
     return [a["receipt"] for a in runtime.list_actions(run_id) if a["receipt"] is not None]
+
+
+def _intent_id(runtime: ControlPlane, run_id: str) -> str:
+    (action,) = runtime.list_actions(run_id)
+    return str(action["intent"]["id"])
+
+
+def _dispatch_and_return(runtime: ControlPlane, run_id: str, gate: dict) -> Any:
+    """Approve (dispatch) the actor gate, then record that the handoff returned."""
+
+    dispatched = runtime.approve_gate(run_id, gate["id"])
+    assert dispatched.state == RunState.PAUSED  # approval dispatches; it does not verify
+    return runtime.complete_actor_handoff(run_id, _intent_id(runtime, run_id))
 
 
 def _gate_paused(runtime: ControlPlane) -> tuple[str, dict]:
@@ -248,10 +265,13 @@ def test_scenario_l_actor_route_records_intent_opens_gate_and_pauses() -> None:
         EventType.CAPABILITY_RESOLVED,
         EventType.CAPABILITY_INVOKED,
         EventType.BUDGET_RESERVED,
-        EventType.POLICY_EVALUATED,
         EventType.ACTION_STARTED,
     ):
         assert absent not in types
+    # Policy is evaluated on node-level inputs before the intent and the gate (B3-R2).
+    policy = next(e for e in events if e.type == EventType.POLICY_EVALUATED)
+    assert policy.sequence < created.sequence
+    assert intent["delegation_route"] == "actor"
     providers = runtime.capabilities.list()
     assert not any("relay" in d.name or "relay" in d.provider_id for d in providers)
 
@@ -260,8 +280,7 @@ def test_scenario_l_actor_route_needs_no_registered_provider() -> None:
     calls: list[str] = []
     runtime = _runtime(calls, register_provider=False, observer=_observer({"exists": True}))
     run_id, gate = _gate_paused(runtime)
-    runtime.approve_gate(run_id, gate["id"])
-    assert runtime.run_until_blocked(run_id).state == RunState.COMPLETED
+    assert _dispatch_and_return(runtime, run_id, gate).state == RunState.COMPLETED
     assert calls == []
     assert runtime.capabilities.list() == ()
 
@@ -284,8 +303,7 @@ def test_actor_approval_without_evidence_writes_no_pass_receipt(observer: Any) -
     calls: list[str] = []
     runtime = _runtime(calls, observer=observer)
     run_id, gate = _gate_paused(runtime)
-    runtime.approve_gate(run_id, gate["id"])
-    paused = runtime.run_until_blocked(run_id)
+    paused = _dispatch_and_return(runtime, run_id, gate)
 
     assert calls == []
     assert paused.state == RunState.PAUSED
@@ -309,9 +327,8 @@ def test_actor_reconcile_without_evidence_writes_no_receipt_then_evidence_passes
     calls: list[str] = []
     runtime = _runtime(calls)
     run_id, gate = _gate_paused(runtime)
-    runtime.approve_gate(run_id, gate["id"])
-    runtime.run_until_blocked(run_id)
-    intent_id = runtime.list_actions(run_id)[0]["intent"]["id"]
+    _dispatch_and_return(runtime, run_id, gate)
+    intent_id = _intent_id(runtime, run_id)
 
     with pytest.raises(RunBlocked, match="independent external-state evidence"):
         runtime.reconcile_action(run_id, intent_id, occurred=True)
@@ -333,7 +350,13 @@ def test_actor_approval_with_independent_evidence_mints_pass_receipt() -> None:
     run_id, gate = _gate_paused(runtime)
     assert contexts == []  # nothing is observed before the handoff returns
     runtime.approve_gate(run_id, gate["id"])
-    final = runtime.run_until_blocked(run_id)
+    dispatched = runtime.list_events(run_id)
+    assert dispatched[-1].type == EventType.ACTION_STARTED  # approval = dispatch
+    assert dispatched[-2].type == EventType.ACTION_AUTHORIZED
+    assert contexts == []  # still nothing observed: the handoff has not returned
+    with pytest.raises(RunBlocked, match="paused"):
+        runtime.execute_next(run_id)
+    final = runtime.complete_actor_handoff(run_id, _intent_id(runtime, run_id))
 
     assert calls == []
     assert final.state == RunState.COMPLETED
@@ -351,14 +374,15 @@ def test_actor_approval_with_independent_evidence_mints_pass_receipt() -> None:
     authorized = types.index(EventType.ACTION_AUTHORIZED)
     assert authorized < types.index(EventType.ACTION_STARTED)
     assert types.index(EventType.ACTION_STARTED) < types.index(EventType.ACTION_RECEIPT_RECORDED)
+    started = next(e for e in dispatched if e.type == EventType.ACTION_STARTED)
+    assert receipt["started_at"] == started.occurred_at  # dated from dispatch, not return
 
 
 def test_actor_approval_with_evidence_of_absence_fails_without_receipt() -> None:
     calls: list[str] = []
     runtime = _runtime(calls, observer=_observer({"exists": False}))
     run_id, gate = _gate_paused(runtime)
-    runtime.approve_gate(run_id, gate["id"])
-    assert runtime.run_until_blocked(run_id).state == RunState.FAILED
+    assert _dispatch_and_return(runtime, run_id, gate).state == RunState.FAILED
     assert _receipts(runtime, run_id) == []
     assert calls == []
 
@@ -506,3 +530,236 @@ def test_locally_satisfied_capability_takes_the_provider_path(
     assert pre[-1]["pre_resolution"]["state"] == "satisfied"
     assert pre[-1]["delegation_route"] is None
     assert runtime.list_actions(run.id)[0]["intent"]["delegated"] is False
+
+
+# --- review round 1: policy before the gate (B3-R2) --------------------------------------
+
+
+def _policy(rule: PolicyRule) -> PolicyEngine:
+    return PolicyEngine((rule, PolicyRule("allow", PolicyDecisionType.ALLOW, "ok")))
+
+
+def test_actor_route_honours_policy_deny_before_the_gate() -> None:
+    calls: list[str] = []
+    deny = _policy(
+        PolicyRule(
+            "no-destructive",
+            PolicyDecisionType.DENY,
+            "destructive denied",
+            side_effect_classes=(SideEffectClass.DESTRUCTIVE,),
+        )
+    )
+    runtime = _runtime(calls, side_effect=SideEffectClass.DESTRUCTIVE, policy=deny)
+    run = runtime.create_run(Goal("delegate", ("done",)))
+    with pytest.raises(RunBlocked, match="policy denied action"):
+        runtime.execute_next(run.id)
+    types = _types(runtime, run.id)
+    assert EventType.POLICY_EVALUATED in types
+    assert runtime.list_actions(run.id) == []
+    assert runtime.list_pending_gates(run.id) == []
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("rule", "message"),
+    [
+        (
+            PolicyRule(
+                "justify",
+                PolicyDecisionType.ALLOW,
+                "explain yourself",
+                justification_required=True,
+            ),
+            "justification",
+        ),
+        (
+            PolicyRule(
+                "human-check",
+                PolicyDecisionType.ALLOW,
+                "needs human verification",
+                required_verification=("human",),
+            ),
+            "policy-required verification",
+        ),
+    ],
+    ids=["justification", "required-verification"],
+)
+def test_actor_route_honours_policy_requirements_before_the_gate(
+    rule: PolicyRule, message: str
+) -> None:
+    calls: list[str] = []
+    runtime = _runtime(calls, policy=_policy(rule))
+    run = runtime.create_run(Goal("delegate", ("done",)))
+    with pytest.raises(RunBlocked, match=message):
+        runtime.execute_next(run.id)
+    assert runtime.list_actions(run.id) == []
+    assert runtime.list_pending_gates(run.id) == []
+    assert calls == []
+
+
+def test_actor_policy_sees_node_level_inputs() -> None:
+    seen: list[dict] = []
+
+    class Recording(PolicyEngine):
+        def evaluate_action(self, **kwargs: Any) -> Any:
+            seen.append(dict(kwargs))
+            return super().evaluate_action(**kwargs)
+
+    runtime = _runtime([], policy=Recording())
+    run = runtime.create_run(Goal("delegate", ("done",)))
+    runtime.run_until_blocked(run.id)
+    assert seen and seen[-1]["side_effect_class"] == SideEffectClass.REVERSIBLE_WRITE
+    assert seen[-1]["reversible"] is False
+    assert seen[-1]["run_risk"] == runtime.get_run(run.id).risk_level
+    assert seen[-1]["capability_risk"] == RiskLevel.LOW
+
+
+# --- review round 1: the intent is bound to its route (B3-R1, B3-R3) ---------------------
+
+
+def test_dispatched_actor_intent_is_never_executed_on_the_provider_path(tmp_path: Any) -> None:
+    """B3-R1 regression: a host that HAS the facility must not invoke a dispatched handoff."""
+
+    db = str(tmp_path / "runs.sqlite")
+    calls: list[str] = []
+    first = _runtime(calls, store=SQLiteEventStore(db))
+    run_id, gate = _gate_paused(first)
+    first.approve_gate(run_id, gate["id"])
+
+    gpu = _runtime(
+        calls,
+        store=SQLiteEventStore(db),
+        runtime_environment=frozenset({RuntimeRequirement.GPU}),
+        observer=_observer({"exists": True}),
+    )
+    gpu.resume_run(run_id)
+    with pytest.raises(RunBlocked):
+        gpu.execute_next(run_id)
+    # Force the node back to pending: the route binding still refuses the provider path.
+    gpu._set_node(gpu.get_run(run_id), "write", NodeStatus.PENDING)
+    with pytest.raises(RunBlocked, match="bound to the actor route"):
+        gpu.execute_next(run_id)
+    assert calls == []
+    assert gpu.get_run(run_id).node_status["write"] == NodeStatus.BLOCKED
+    assert gpu.complete_actor_handoff(run_id, _intent_id(gpu, run_id)).state == RunState.COMPLETED
+    assert calls == []
+    assert len(gpu.list_actions(run_id)) == 1
+
+
+def test_same_host_refuses_to_re_dispatch_an_authorized_actor_intent() -> None:
+    calls: list[str] = []
+    runtime = _runtime(calls)
+    run_id, gate = _gate_paused(runtime)
+    runtime.approve_gate(run_id, gate["id"])
+    runtime.resume_run(run_id)
+    runtime._set_node(runtime.get_run(run_id), "write", NodeStatus.PENDING)
+    with pytest.raises(RunBlocked, match="already dispatched"):
+        runtime.execute_next(run_id)
+    assert runtime.list_pending_gates(run_id) == []
+    assert calls == []
+
+
+def test_complete_actor_handoff_refuses_undispatched_and_provider_intents() -> None:
+    runtime = _runtime([])
+    run_id, _ = _gate_paused(runtime)
+    with pytest.raises(RunBlocked, match="never dispatched"):
+        runtime.complete_actor_handoff(run_id, _intent_id(runtime, run_id))
+    provider_calls: list[str] = []
+    provider = _provider_gate_runtime(provider_calls)
+    provider_run, _ = _gate_paused(provider)
+    with pytest.raises(RunBlocked, match="not an actor-route handoff"):
+        provider.complete_actor_handoff(provider_run, _intent_id(provider, provider_run))
+
+
+def test_cancel_after_dispatch_leaves_the_effect_reconcilable() -> None:
+    """B3-R3: after dispatch the effect stays started and reconcilable, never 'never started'."""
+
+    calls: list[str] = []
+    runtime = _runtime(calls)
+    run_id, gate = _gate_paused(runtime)
+    runtime.approve_gate(run_id, gate["id"])
+    with pytest.raises(RunBlocked, match="not pending"):
+        runtime.reject_gate(run_id, gate["id"])  # the decision is already recorded
+    assert runtime.cancel_run(run_id).state == RunState.CANCELLED
+    assert any(
+        o.get("class") == "unknown_failure" and "dispatched actor handoff" in o.get("detail", "")
+        for o in runtime.list_observations(run_id)
+    )
+    intent_id = _intent_id(runtime, run_id)
+    assert runtime.list_actions(run_id)[0]["receipt"] is None
+    runtime.external_observer = _observer({"exists": True})
+    runtime.reconcile_action(run_id, intent_id, occurred=True)
+    (receipt,) = _receipts(runtime, run_id)
+    assert receipt["verification"]["status"] == "pass"
+    assert calls == []
+
+
+def test_reject_before_dispatch_starts_nothing() -> None:
+    runtime = _runtime([])
+    run_id, gate = _gate_paused(runtime)
+    runtime.reject_gate(run_id, gate["id"])
+    assert EventType.ACTION_STARTED not in _types(runtime, run_id)
+    with pytest.raises(RunBlocked):
+        runtime.complete_actor_handoff(run_id, _intent_id(runtime, run_id))
+
+
+# --- review round 1: process restart (B3-R6) ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [frozenset(), frozenset({RuntimeRequirement.GPU})],
+    ids=["same-facilities", "host-has-facility"],
+)
+def test_restart_with_pending_actor_gate(tmp_path: Any, environment: frozenset) -> None:
+    db = str(tmp_path / "runs.sqlite")
+    calls: list[str] = []
+    run_id, gate = _gate_paused(_runtime(calls, store=SQLiteEventStore(db)))
+    restarted = _runtime(
+        calls,
+        store=SQLiteEventStore(db),
+        runtime_environment=environment,
+        observer=_observer({"exists": True}),
+    )
+    assert [g["id"] for g in restarted.list_pending_gates(run_id)] == [gate["id"]]
+    final = _dispatch_and_return(restarted, run_id, gate)
+    assert final.state == RunState.COMPLETED
+    assert calls == []
+
+
+def test_restart_with_dispatched_unreturned_handoff(tmp_path: Any) -> None:
+    db = str(tmp_path / "runs.sqlite")
+    calls: list[str] = []
+    first = _runtime(calls, store=SQLiteEventStore(db))
+    run_id, gate = _gate_paused(first)
+    first.approve_gate(run_id, gate["id"])
+    restarted = _runtime(
+        calls, store=SQLiteEventStore(db), observer=_observer({"exists": True})
+    )
+    assert restarted.get_run(run_id).state == RunState.PAUSED
+    assert restarted.list_pending_gates(run_id) == []
+    final = restarted.complete_actor_handoff(run_id, _intent_id(restarted, run_id))
+    assert final.state == RunState.COMPLETED
+    (receipt,) = _receipts(restarted, run_id)
+    assert receipt["verification"]["status"] == "pass"
+    assert calls == []
+
+
+def test_restart_with_blocked_actor_verification(tmp_path: Any) -> None:
+    db = str(tmp_path / "runs.sqlite")
+    calls: list[str] = []
+    first = _runtime(calls, store=SQLiteEventStore(db))
+    run_id, gate = _gate_paused(first)
+    assert _dispatch_and_return(first, run_id, gate).state == RunState.PAUSED
+    restarted = _runtime(
+        calls,
+        store=SQLiteEventStore(db),
+        runtime_environment=frozenset({RuntimeRequirement.GPU}),
+        observer=_observer({"exists": True}),
+    )
+    with pytest.raises(RunBlocked, match="started side effect"):
+        restarted.resume_run(run_id)
+    reconciled = restarted.reconcile_action(run_id, _intent_id(restarted, run_id), occurred=True)
+    assert reconciled.node_status["write"] == NodeStatus.COMPLETED
+    assert [r["verification"]["status"] for r in _receipts(restarted, run_id)] == ["pass"]
+    assert calls == []
