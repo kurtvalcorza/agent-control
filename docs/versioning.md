@@ -21,6 +21,11 @@ evidence (recorded in verification results and action receipts), `observation_re
 resolved). It is present only for reference-only observations; direct observations and every
 existing event keep their meaning.
 
+RFC #6 Phase B2 stays on `"2"`: it adds one additive field to `CapabilitySourceChecked`, `method`
+(`"derive"` for a blinded re-derivation, `"check"` for a `check()` source, `null` when no usable
+source was registered). Status values and their effect on resume are unchanged; events recorded
+before B2 carry no `method`.
+
 Every persisted event stores its schema version. Replay fails closed when an event uses an
 unsupported version; it never guesses how to interpret an unknown payload.
 
