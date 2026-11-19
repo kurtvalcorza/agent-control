@@ -102,6 +102,8 @@ class ControlPlane(RecoveryControlPlane):
         require_goal_coverage(run.goal, plan)
         unlimited = BudgetState(BudgetLimit())
         for node in plan.nodes:
+            if not self._node_needs_provider(node):
+                continue
             self.capabilities.resolve(
                 node.required_capabilities[0],
                 unlimited,

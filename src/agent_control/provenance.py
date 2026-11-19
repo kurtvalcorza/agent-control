@@ -196,6 +196,21 @@ class CapabilityClause:
         )
 
 
+class DelegationRoute(StrEnum):
+    """Where a ``DELEGATION_REQUIRED`` capability goes (RFC #6 s12, Phase B3).
+
+    ``PROVIDER`` (the default) keeps the normal capability path: ``resolve()`` picks a registered
+    provider and ``invoke()`` runs it. ``ACTOR`` ends at an actor/``HumanGate`` boundary: the run
+    records the ``ActionIntent``, opens a gate and pauses for another agent or session (for
+    example an Agent Relay handoff). Nothing is resolved or invoked on that route, and there is
+    deliberately no relay value: Agent Relay is a handoff protocol, not a provider (Scenario L).
+    The route applies only when pre-resolution returns ``DELEGATION_REQUIRED``.
+    """
+
+    PROVIDER = "provider"
+    ACTOR = "actor"
+
+
 @dataclass(frozen=True, slots=True)
 class CapabilityContract:
     """Normalized evidence a source adapter supplies for one capability source snapshot."""
@@ -208,10 +223,14 @@ class CapabilityContract:
     runtime_requirements: frozenset[RuntimeRequirement] = frozenset()
     clauses: tuple[CapabilityClause, ...] = ()
     delegation_permitted: bool = False
+    delegation_route: DelegationRoute = DelegationRoute.PROVIDER
 
     def __post_init__(self) -> None:
         if self.missing_dependencies and self.closure_complete:
             raise ValueError("closure cannot be complete while dependencies are missing")
+        object.__setattr__(self, "delegation_route", DelegationRoute(self.delegation_route))
+        if self.delegation_route == DelegationRoute.ACTOR and not self.delegation_permitted:
+            raise ValueError("an actor delegation route requires delegation_permitted=True")
         ids = [clause.id for clause in self.clauses]
         if len(ids) != len(set(ids)):
             raise ValueError("capability clause ids must be unique")

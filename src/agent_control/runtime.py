@@ -20,6 +20,7 @@ from .ids import new_id
 from .memory import WorkingMemory
 from .models import (
     ActionReceipt,
+    AuthorizationState,
     BudgetReservation,
     NodeStatus,
     ObservationClass,
@@ -42,6 +43,7 @@ from .provenance import (
     CapabilityPreResolution,
     CapabilityPreResolutionState,
     CapabilitySourceRegistry,
+    DelegationRoute,
     ExternalObservation,
     ExternalObservationResolver,
     ExternalStateObserver,
@@ -126,6 +128,17 @@ class ControlPlane(_ControlPlane):
             record is not None
             and record["pre_resolution"]["state"]
             == CapabilityPreResolutionState.DELEGATION_REQUIRED.value
+        )
+
+    def _node_is_actor_routed(self, run_id: str, node_id: str, plan_version: int) -> bool:
+        """True when this node's recorded pre-resolution took the actor route (RFC #6 B3)."""
+
+        record = self._pre_resolution_record(run_id, node_id, plan_version)
+        return bool(
+            record is not None
+            and record["pre_resolution"]["state"]
+            == CapabilityPreResolutionState.DELEGATION_REQUIRED.value
+            and record.get("delegation_route") == DelegationRoute.ACTOR.value
         )
 
     def _with_resolution_provenance(
@@ -241,6 +254,7 @@ class ControlPlane(_ControlPlane):
             raise RunBlocked("capability source changed during run; replan required")
 
         resolution: CapabilityPreResolution = pre_resolve(contract, self.runtime_environment)
+        delegated = resolution.state == CapabilityPreResolutionState.DELEGATION_REQUIRED
         self._append(
             run.id,
             EventType.CAPABILITY_PRE_RESOLVED,
@@ -251,6 +265,8 @@ class ControlPlane(_ControlPlane):
                 "provenance": provenance.to_dict(),
                 "pre_resolution": resolution.to_dict(),
                 "required_clause_ids": list(required_clauses),
+                # RFC #6 B3: which route resolves the delegation; null when none is required.
+                "delegation_route": contract.delegation_route.value if delegated else None,
             },
         )
         if resolution.state == CapabilityPreResolutionState.UNSATISFIED:
@@ -280,7 +296,109 @@ class ControlPlane(_ControlPlane):
                 node,
                 "delegated commit requires independent external_state verification",
             )
+        if delegated and contract.delegation_route == DelegationRoute.ACTOR:
+            kinds = node.verification.kinds
+            if VerificationKind.EXTERNAL_STATE not in kinds:
+                self._block_node_before_invocation(
+                    run,
+                    node,
+                    "actor-routed delegation requires independent external_state verification",
+                )
+            others = sorted(kind.value for kind in kinds if kind != VerificationKind.EXTERNAL_STATE)
+            if others:
+                # The actor route captures no executor output, so these kinds have no subject.
+                self._block_node_before_invocation(
+                    run,
+                    node,
+                    "actor-routed delegation has no executor output to verify: "
+                    + ", ".join(others),
+                )
         return None
+
+    def _plan_time_actor_routed(self, node: PlanNode) -> bool:
+        """Plan-time view of the B3 actor route; it emits no events and leans to providers.
+
+        A source that cannot be loaded here counts as provider-routed, so plan validation keeps
+        requiring a provider and execution surfaces the load failure as before.
+        """
+
+        capability = node.required_capabilities[0]
+        source = (
+            self.capability_sources.get(capability)
+            if self.capability_sources is not None
+            else None
+        )
+        if source is None:
+            return False
+        try:
+            contract = source.load(capability)
+        except Exception:
+            return False
+        if not isinstance(contract, CapabilityContract) or contract.capability != capability:
+            return False
+        return (
+            contract.delegation_route == DelegationRoute.ACTOR
+            and pre_resolve(contract, self.runtime_environment).state
+            == CapabilityPreResolutionState.DELEGATION_REQUIRED
+        )
+
+    def _node_needs_provider(self, node: PlanNode) -> bool:
+        return not self._plan_time_actor_routed(node)
+
+    def _execute_actor_route(self, run: Run, node: PlanNode) -> Run:
+        """RFC #6 s12 / Scenario L: delegation that ends at an actor/``HumanGate`` boundary.
+
+        The dispatching run records the ``ActionIntent`` first, then opens a gate and pauses for
+        the other agent or session. Nothing is resolved, invoked or budgeted, and no relay
+        provider exists. Approving the gate records that the handoff returned; the action is then
+        marked started and verified only through the independent ``EXTERNAL_STATE`` path (s13),
+        so an approval alone never mints a PASS receipt.
+        """
+
+        capability = node.required_capabilities[0]
+        record = self._open_intent(run, node.id)
+        if record is None:
+            # No provider descriptor exists on this route: the intent takes the node's declared
+            # side-effect class and is conservatively irreversible (never auto-compensated).
+            record = self._create_intent(
+                run,
+                node_id=node.id,
+                capability_name=capability,
+                side_effect_class=node.side_effect_class,
+                reversible=False,
+                authorization=AuthorizationState.PENDING,
+            )
+        if not record["authorized"]:
+            return self._open_gate(
+                self.get_run(run.id),
+                record,
+                f"actor delegation: hand off {capability!r} to another agent or session; "
+                "approve when the handoff returns (a PASS receipt still needs independent "
+                "external-state evidence)",
+            )
+        intent_id = str(record["intent"]["id"])
+        current = self._transition(self.get_run(run.id), RunState.EXECUTING)
+        current = self._set_node(current, node.id, NodeStatus.RUNNING)
+        self._append(
+            current.id, EventType.ACTION_STARTED, {"intent_id": intent_id, "node_id": node.id}
+        )
+        current = self._transition(self.get_run(current.id), RunState.VERIFYING)
+        current = self._set_node(current, node.id, NodeStatus.VERIFYING)
+        self._append(current.id, EventType.VERIFICATION_STARTED, {"node_id": node.id})
+        verification = self._verify_node_output(
+            current,
+            node,
+            None,
+            {"run_id": current.id, "node_id": node.id, "intent_id": intent_id},
+        )
+        return self._record_verification_outcome(
+            current,
+            node,
+            record,
+            verification,
+            effects=(node.objective,),
+            rollback_ref=None,
+        )
 
     def _independent_external_verification(
         self, spec: VerificationSpec, context: dict[str, Any]
@@ -425,6 +543,8 @@ class ControlPlane(_ControlPlane):
         super()._validate_plan_for_runtime(run, plan)
         require_goal_coverage(run.goal, plan)
         for node in plan.nodes:
+            if not self._node_needs_provider(node):
+                continue
             self.capabilities.resolve(
                 node.required_capabilities[0],
                 run.budget,
@@ -619,6 +739,8 @@ class ControlPlane(_ControlPlane):
         failed = self._pre_resolve_node(run, node)
         if failed is not None:
             return failed
+        if self._node_is_actor_routed(run.id, node.id, run.plan_version):
+            return self._execute_actor_route(self.get_run(run.id), node)
         provider = self.capabilities.resolve(
             node.required_capabilities[0],
             run.budget,
