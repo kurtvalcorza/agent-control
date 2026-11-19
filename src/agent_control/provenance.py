@@ -22,6 +22,8 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Protocol
 
+from .models import RiskLevel
+
 SHA256_ALGORITHM = "sha256"
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _CLAUSE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
@@ -196,6 +198,21 @@ class CapabilityClause:
         )
 
 
+class DelegationRoute(StrEnum):
+    """Where a ``DELEGATION_REQUIRED`` capability goes (RFC #6 s12, Phase B3).
+
+    ``PROVIDER`` (the default) keeps the normal capability path: ``resolve()`` picks a registered
+    provider and ``invoke()`` runs it. ``ACTOR`` ends at an actor/``HumanGate`` boundary: the run
+    records the ``ActionIntent``, opens a gate and pauses for another agent or session (for
+    example an Agent Relay handoff). Nothing is resolved or invoked on that route, and there is
+    deliberately no relay value: Agent Relay is a handoff protocol, not a provider (Scenario L).
+    The route applies only when pre-resolution returns ``DELEGATION_REQUIRED``.
+    """
+
+    PROVIDER = "provider"
+    ACTOR = "actor"
+
+
 @dataclass(frozen=True, slots=True)
 class CapabilityContract:
     """Normalized evidence a source adapter supplies for one capability source snapshot."""
@@ -208,10 +225,25 @@ class CapabilityContract:
     runtime_requirements: frozenset[RuntimeRequirement] = frozenset()
     clauses: tuple[CapabilityClause, ...] = ()
     delegation_permitted: bool = False
+    delegation_route: DelegationRoute = DelegationRoute.PROVIDER
+    # Policy inputs for the actor route, which has no provider descriptor (RFC #6 B3). ``None``
+    # means undeclared: risk is then evaluated as CRITICAL; see docs/providers.md.
+    risk_class: RiskLevel | None = None
+    permissions: tuple[str, ...] | None = None
+    estimated_cost_usd: float | None = None
 
     def __post_init__(self) -> None:
         if self.missing_dependencies and self.closure_complete:
             raise ValueError("closure cannot be complete while dependencies are missing")
+        object.__setattr__(self, "delegation_route", DelegationRoute(self.delegation_route))
+        if self.risk_class is not None:
+            object.__setattr__(self, "risk_class", RiskLevel(self.risk_class))
+        if self.permissions is not None:
+            object.__setattr__(self, "permissions", tuple(str(p) for p in self.permissions))
+        if self.estimated_cost_usd is not None and self.estimated_cost_usd < 0:
+            raise ValueError("estimated_cost_usd must be non-negative")
+        if self.delegation_route == DelegationRoute.ACTOR and not self.delegation_permitted:
+            raise ValueError("an actor delegation route requires delegation_permitted=True")
         ids = [clause.id for clause in self.clauses]
         if len(ids) != len(set(ids)):
             raise ValueError("capability clause ids must be unique")

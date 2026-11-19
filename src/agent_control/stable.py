@@ -102,6 +102,8 @@ class ControlPlane(RecoveryControlPlane):
         require_goal_coverage(run.goal, plan)
         unlimited = BudgetState(BudgetLimit())
         for node in plan.nodes:
+            if not self._node_needs_provider(node):
+                continue
             self.capabilities.resolve(
                 node.required_capabilities[0],
                 unlimited,
@@ -271,6 +273,7 @@ class ControlPlane(RecoveryControlPlane):
         *,
         invalidated_nodes: set[str] | None = None,
     ) -> Run:
+        self._refuse_replan_with_outstanding_handoff(run_id)
         run = self.get_run(run_id)
         if run.plan is None:
             raise RunBlocked("cannot replan before an initial plan exists")

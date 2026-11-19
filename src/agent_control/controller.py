@@ -164,6 +164,8 @@ class ControlPlane:
         for node in plan.nodes:
             if len(node.required_capabilities) != 1:
                 raise ValueError("MVP requires exactly one capability per plan node")
+            if not self._node_needs_provider(node):
+                continue
             name = node.required_capabilities[0]
             descriptors = self.capabilities.descriptors(name)
             if not descriptors:
@@ -176,6 +178,15 @@ class ControlPlane:
                     f"no provider for {name!r} matches side-effect class "
                     f"{node.side_effect_class.value!r}"
                 )
+
+    def _node_needs_provider(self, node: PlanNode) -> bool:
+        """Whether plan validation must find a registered provider for ``node``.
+
+        Always true here; the runtime exempts nodes routed to an actor boundary (RFC #6 B3).
+        """
+
+        del node
+        return True
 
     def plan_run(self, run_id: str) -> Run:
         run = self.get_run(run_id)
@@ -456,15 +467,7 @@ class ControlPlane:
             raise RunBlocked("budget pressure: no eligible provider") from exc
         descriptor = provider.descriptor
         decision = self._policy_decision(run, node_id, provider)
-        if decision.justification_required and not node.justification:
-            raise RunBlocked("policy requires node justification")
-        if (
-            decision.required_verification
-            and node.verification.kind.value not in set(decision.required_verification)
-        ):
-            raise RunBlocked("plan does not satisfy policy-required verification")
-        if decision.decision == PolicyDecisionType.DENY:
-            raise RunBlocked(f"policy denied action: {decision.reason}")
+        self._enforce_policy_decision(node, decision)
 
         record: dict[str, Any] | None = None
         if is_side_effecting(descriptor.side_effect_class):
@@ -616,6 +619,41 @@ class ControlPlane:
                 "intent_id": record["intent"]["id"] if record is not None else None,
             },
         )
+        return self._record_verification_outcome(
+            run,
+            node,
+            record,
+            verification,
+            effects=tuple(result.metadata.get("effects", (node.objective,))),
+            rollback_ref=result.metadata.get("rollback_ref"),
+        )
+
+    def _enforce_policy_decision(self, node: PlanNode, decision: PolicyDecision) -> None:
+        """Justification, required-verification and DENY checks shared by every route."""
+
+        if decision.justification_required and not node.justification:
+            raise RunBlocked("policy requires node justification")
+        if (
+            decision.required_verification
+            and node.verification.kind.value not in set(decision.required_verification)
+        ):
+            raise RunBlocked("plan does not satisfy policy-required verification")
+        if decision.decision == PolicyDecisionType.DENY:
+            raise RunBlocked(f"policy denied action: {decision.reason}")
+
+    def _record_verification_outcome(
+        self,
+        run: Run,
+        node: PlanNode,
+        record: dict[str, Any] | None,
+        verification: VerificationResult,
+        *,
+        effects: tuple[str, ...],
+        rollback_ref: str | None,
+    ) -> Run:
+        """Record a node's verification and act on it: only PASS mints a receipt."""
+
+        node_id = node.id
         self._append(
             run.id,
             EventType.VERIFICATION_FINISHED,
@@ -631,11 +669,9 @@ class ControlPlane:
                 receipt = ActionReceipt(
                     id=new_id("receipt"),
                     intent_id=str(record["intent"]["id"]),
-                    actual_effects=tuple(
-                        result.metadata.get("effects", (node.objective,))
-                    ),
+                    actual_effects=effects,
                     verification=verification,
-                    rollback_ref=result.metadata.get("rollback_ref"),
+                    rollback_ref=rollback_ref,
                 )
                 self._append(
                     run.id,

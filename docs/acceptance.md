@@ -71,10 +71,41 @@ steps is tracked as an infrastructure blocker, not treated as a passing code gat
 | Delegated commit verification is independent | `ActionIntent.delegated`, `ExternalStateObserver` | `tests/test_delegated_verification.py` (M, N, O) |
 | Reconciliation cannot bypass delegated verification | delegated guard in `reconcile_action()` | `tests/test_delegated_verification.py` (Q + later-evidence + local-unchanged) |
 | Blinded source re-derivation (Phase B2, AC6-R3) | `CapabilitySourceLocator` (no digest field), `DerivingCapabilitySource.derive`, `derive_capability_source`, `CapabilitySourceChecked.method` | `tests/test_blinded_derive.py` (locator has no digest, derive never sees it, wrong digest MISMATCH, raise/None/untyped/other source UNAVAILABLE, check-only still works, both uses derive only) |
+| Agent Relay is not an executor/provider (Phase B3, L) | `DelegationRoute`, `CapabilityContract.delegation_route`, `CapabilityPreResolved.delegation_route`, `ControlPlane._execute_actor_route` | `tests/test_actor_route.py` (policy, then intent, then gate, then pause; no `resolve()`, no `invoke()`, no relay provider; approval dispatches and the return needs §13 evidence; intents bound to their route, including restart on a host with the facility; cancel after dispatch stays reconcilable; rejection and an undecided gate match existing gates; provider route and default unchanged) |
 | Observation references are independently resolvable (Phase B1) | `ExternalObservationResolver`, `ControlPlane(observation_resolver=...)`, `_resolve_observation_reference` | `tests/test_observation_resolver.py` (P: resolved PASS, unresolved BLOCKED, contradicting FAIL, resolver input, reconcile incl. AC6-R2) |
 
-Scenario L (an Agent Relay handoff ends at an actor/`HumanGate` boundary) has no executable route in
-Phase A. The runtime registers no relay provider. Scenario P (reference-only observations) is
+Scenario L (an Agent Relay handoff ends at an actor/`HumanGate` boundary) is covered by Phase B3:
+a contract with `delegation_route=ACTOR` records the intent, opens a gate and pauses without
+resolving or invoking anything, and the runtime registers no relay provider. Scenario P (reference-only observations) is
 covered by Phase B1: a separate host resolver re-fetches the reference; without one, a
 reference-only observation (`state=None`) is still blocked before the verifier
 (`tests/test_phase_a_review_fixes.py`, AC6-R7, and `tests/test_observation_resolver.py`).
+
+## RFC #6 scenario coverage (A–R)
+
+Every acceptance scenario in RFC #6 §17 cites at least one executable test. Each citation is a
+pytest node ID (`file::test`); `pytest --collect-only -q <citation>` resolves every one.
+
+| Scenario | RFC #6 §17 title | Test |
+| --- | --- | --- |
+| A | exact source provenance is auditable | `tests/test_capability_provenance.py::test_scenario_a_provenance_is_auditable_in_run_history` |
+| B | checkpoint preserves capability source identity | `tests/test_capability_provenance.py::test_scenario_b_resume_with_matching_source_needs_no_resource_provider` |
+| C | no source-check path fails closed | `tests/test_capability_provenance.py::test_scenario_c_no_source_check_path_blocks_resume` |
+| D | source unavailable fails closed | `tests/test_capability_provenance.py::test_scenario_d_unreachable_source_blocks` |
+| E | capability source drift fails closed | `tests/test_capability_provenance.py::test_scenario_e_source_drift_while_paused_blocks_with_input_changed` |
+| F | pre-resolution is not a second provider resolver | `tests/test_capability_provenance.py::test_scenario_f_satisfied_pre_resolution_does_not_override_budget` |
+| G | missing required governance fails closed | `tests/test_capability_provenance.py::test_scenario_g_missing_required_governance_is_unsatisfied` |
+| H | declared degraded mode remains explicit | `tests/test_capability_provenance.py::test_scenario_h_optional_clause_degrades_explicitly` |
+| I | dropped required clause blocks | `tests/test_capability_provenance.py::test_scenario_i_dropped_required_clause_blocks_before_invocation` |
+| J | unknown required clause blocks | `tests/test_capability_provenance.py::test_scenario_j_unknown_required_clause_blocks` |
+| K | runtime mismatch requires delegation | `tests/test_capability_provenance.py::test_scenario_k_runtime_mismatch_requires_delegation_only_when_permitted` |
+| L | Agent Relay is not an executor/provider | `tests/test_actor_route.py::test_scenario_l_actor_route_records_intent_opens_gate_and_pauses` |
+| M | delegated mutation stays in the action ledger | `tests/test_delegated_verification.py::test_scenario_m_and_n_self_report_without_independent_observation_blocks` |
+| N | executor self-report cannot verify its own commit | `tests/test_delegated_verification.py::test_scenario_m_and_n_self_report_without_independent_observation_blocks` |
+| O | direct independent observation can verify a delegated commit | `tests/test_delegated_verification.py::test_scenario_o_independent_observation_verifies_delegated_commit` |
+| P | observation reference must be independently resolvable | `tests/test_observation_resolver.py::test_scenario_p_unresolved_reference_blocks_without_pass_receipt` |
+| Q | reconciliation cannot bypass delegated verification | `tests/test_delegated_verification.py::test_scenario_q_reconciliation_cannot_mint_delegated_pass_without_evidence` |
+| R | human availability is not pre-resolution availability | `tests/test_phase_a_review_fixes.py::test_r6_scenario_r_human_absence_is_a_gate_not_unsatisfied` |
+
+The rows above are the primary citations; the Phase A and Phase B tables earlier in this file list
+the supporting tests for each requirement.

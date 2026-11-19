@@ -26,6 +26,21 @@ RFC #6 Phase B2 stays on `"2"`: it adds one additive field to `CapabilitySourceC
 source was registered). Status values and their effect on resume are unchanged; events recorded
 before B2 carry no `method`.
 
+RFC #6 Phase B3 stays on `"2"` (owner ruling D4, 2026-11-20). It adds two additive fields:
+`CapabilityPreResolved.delegation_route` (`"provider"` or `"actor"` when the state is
+`delegation_required`, `null` otherwise) and `ActionIntent.delegation_route` (the route a delegated
+intent is bound to, `null` for non-delegated intents). Events recorded before B3 carry neither, and
+replay as the provider route. The actor route emits existing event types whose meanings hold:
+`PolicyEvaluated`, `ActionIntentCreated`, `HumanGateOpened`, `HumanGateResolved`,
+`ActionAuthorized`, `ActionStarted`, the verification events and, on PASS,
+`ActionReceiptRecorded`. `ActionStarted` keeps its meaning, "the side effect is about to begin":
+on the actor route it is emitted when gate approval dispatches the handoff, the moment the other
+agent or session may act, just as the provider route emits it immediately before invocation. The
+actor route emits no `CapabilityResolved`, `CapabilityInvoked` or budget events; no consumer
+depends on `CapabilityResolved` preceding `ActionStarted`. `cancel_run()` now also closes pending
+gates with the existing `HumanGateResolved` (`status: rejected`) and `ActionRejected` events, with
+their existing meanings: the gate was decided against and the intent will not run.
+
 Every persisted event stores its schema version. Replay fails closed when an event uses an
 unsupported version; it never guesses how to interpret an unknown payload.
 
