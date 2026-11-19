@@ -2,7 +2,7 @@
 
 The normative product specification is GitHub Issue #1:
 
-https://github.com/kurtvalcorza/agent-control-plane/issues/1
+https://github.com/kurtvalcorza/agent-control/issues/1
 
 This repository implements that specification as an event-sourced Python 3.12+ runtime. The issue
 remains the requirement source; code, tests and documentation are the executable evidence.

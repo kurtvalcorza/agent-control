@@ -26,9 +26,9 @@ formatting, lint, typing, and tests.
 | Ambiguous-effect fail-closed behavior | started write pauses until operator reconciliation | `tests/test_ambiguous_effect.py`, `tests/test_audit_recovery.py` |
 | Idempotent retry safety | intent reuse + conservative failed-attempt accounting | `tests/test_adversarial.py` |
 | Operator inspectability | goal/plan/state, provider reason, verification, policy, budget, actions | `tests/test_stable_contract.py` |
-| Failure taxonomy | typed terminal categories and causal metadata contract | `src/agent_control_plane/errors.py` |
-| Evaluation/drift hooks | run evaluation, regression extraction, drift and reviewed proposals | `src/agent_control_plane/evaluation.py`, `src/agent_control_plane/drift.py`, `src/agent_control_plane/improvement.py` |
-| No autonomous self-modification | proposal validate/approve/promote workflow only | `src/agent_control_plane/improvement.py` |
+| Failure taxonomy | typed terminal categories and causal metadata contract | `src/agent_control/errors.py` |
+| Evaluation/drift hooks | run evaluation, regression extraction, drift and reviewed proposals | `src/agent_control/evaluation.py`, `src/agent_control/drift.py`, `src/agent_control/improvement.py` |
+| No autonomous self-modification | proposal validate/approve/promote workflow only | `src/agent_control/improvement.py` |
 | Schema compatibility | explicit supported event schema versions; unknown versions rejected | `tests/test_adversarial.py` |
 | CI quality gates | Ruff, strict Mypy, pytest on Python 3.12/3.13 | `.github/workflows/ci.yml` |
 

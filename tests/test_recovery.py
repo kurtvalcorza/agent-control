@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_control_plane import (
+from agent_control import (
     CapabilityDescriptor,
     CapabilityRegistry,
     CompensationResult,
@@ -14,7 +14,7 @@ from agent_control_plane import (
     SideEffectClass,
     SQLiteEventStore,
 )
-from agent_control_plane.models import CapabilityResult
+from agent_control.models import CapabilityResult
 
 
 class Planner:

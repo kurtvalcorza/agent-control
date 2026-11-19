@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_control_plane import (
+from agent_control import (
     BudgetLimit,
     CapabilityDescriptor,
     CapabilityRegistry,
@@ -22,9 +22,9 @@ from agent_control_plane import (
     VerificationStatus,
     VerifierRegistry,
 )
-from agent_control_plane.models import NodeStatus
-from agent_control_plane.plans import InvalidPlan
-from agent_control_plane.policy import PolicyEngine
+from agent_control.models import NodeStatus
+from agent_control.plans import InvalidPlan
+from agent_control.policy import PolicyEngine
 
 
 class OneNodePlanner:

@@ -3,7 +3,7 @@
 Global options:
 
 ```bash
-agent-control-plane --db control.sqlite3 --json ...
+agent-control --db control.sqlite3 --json ...
 ```
 
 Commands:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_control_plane import (
+from agent_control import (
     CapabilityDescriptor,
     CapabilityRegistry,
     ControlPlane,

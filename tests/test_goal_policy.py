@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_control_plane import (
+from agent_control import (
     CapabilityDescriptor,
     CapabilityRegistry,
     ControlPlane,
@@ -14,8 +14,8 @@ from agent_control_plane import (
     RunBlocked,
     SQLiteEventStore,
 )
-from agent_control_plane.capabilities import CapabilityAuthorizationError
-from agent_control_plane.policy import PolicyEngine
+from agent_control.capabilities import CapabilityAuthorizationError
+from agent_control.policy import PolicyEngine
 
 
 class CoveragePlanner:

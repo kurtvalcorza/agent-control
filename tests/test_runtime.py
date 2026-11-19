@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_control_plane import (
+from agent_control import (
     BudgetLimit,
     CapabilityDescriptor,
     CapabilityRegistry,
@@ -15,8 +15,8 @@ from agent_control_plane import (
     SideEffectClass,
     SQLiteEventStore,
 )
-from agent_control_plane.capabilities import TransientCapabilityError
-from agent_control_plane.models import CapabilityResult
+from agent_control.capabilities import TransientCapabilityError
+from agent_control.models import CapabilityResult
 
 
 class Planner:

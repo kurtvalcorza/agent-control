@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent_control_plane.evaluation import cluster_failures, evaluate_events, regression_case
-from agent_control_plane.events import Event, EventType
+from agent_control.evaluation import cluster_failures, evaluate_events, regression_case
+from agent_control.events import Event, EventType
 
 
 def event(
