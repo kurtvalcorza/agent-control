@@ -15,11 +15,12 @@ policy engine.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 SHA256_ALGORITHM = "sha256"
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
@@ -116,9 +117,11 @@ class ResolvedCapabilityProvenance:
 class CapabilitySourceLocator:
     """Where a recorded capability source lives, without the digest it was recorded with.
 
-    This is the only argument :meth:`DerivingCapabilitySource.derive` receives. It deliberately
-    has no digest field (and ``slots`` admits no extra attributes), so a deriving adapter cannot
-    copy the recorded digest back: it has to compute one from the source (RFC #6 §22 B2, AC6-R3).
+    This is the only argument :meth:`DerivingCapabilitySource.derive` receives. It has no digest
+    field (and ``slots`` admits no extra attributes), so the runtime never hands the recorded
+    digest to ``derive()``, and the runtime compares the result itself (RFC #6 §22 B2, AC6-R3).
+    This is a contract on the call, not an isolation boundary: in-process host code that goes
+    looking for the digest (frame introspection, the event store) is outside what it can stop.
     """
 
     capability: str
@@ -413,15 +416,60 @@ class CapabilitySourceRegistry:
         return tuple(sorted(self._sources))
 
 
+_MISSING = object()
+
+
+def _exact_str(value: object) -> bool:
+    return type(value) is str
+
+
+def _rebuild_derived(derived: object) -> ResolvedCapabilityProvenance | None:
+    """Rebuild a derived provenance from plain ``str`` values, or ``None`` if it is not plain.
+
+    Subclasses of :class:`ResolvedCapabilityProvenance` and ``str`` subclasses in any field are
+    rejected, so no adapter-controlled method takes part in the comparison (B2-R1).
+    """
+
+    if type(derived) is not ResolvedCapabilityProvenance:
+        return None
+    values = {
+        name: object.__getattribute__(derived, name)
+        for name in ("capability", "source_ref", "digest", "revision", "digest_algorithm")
+    }
+    if not all(
+        _exact_str(value)
+        for name, value in values.items()
+        if not (name == "revision" and value is None)
+    ):
+        return None
+    try:
+        return ResolvedCapabilityProvenance(
+            capability=str(values["capability"]),
+            source_ref=str(values["source_ref"]),
+            digest=str(values["digest"]),
+            revision=None if values["revision"] is None else str(values["revision"]),
+            digest_algorithm=str(values["digest_algorithm"]),
+        )
+    except ValueError:
+        return None
+
+
+def _identity_fields(item: ResolvedCapabilityProvenance) -> tuple[object, ...]:
+    return (item.capability, item.source_ref, item.revision, item.digest_algorithm, item.digest)
+
+
 def derive_capability_source(
     source: DerivingCapabilitySource,
     recorded: ResolvedCapabilityProvenance,
 ) -> SourceCheckResult:
-    """Blinded re-derivation: ``derive()`` gets a locator, the runtime compares the digest.
+    """Blinded re-derivation: ``derive()`` gets a locator, the runtime compares the result.
 
-    A raise, ``None``, an untyped result, or a provenance for another capability or source ref is
-    ``UNAVAILABLE``. A derived identity that differs from the recorded one (digest, revision or
-    algorithm) is ``MISMATCH``; an equal one is ``MATCH``.
+    The returned provenance is rebuilt on the runtime side from plain ``str`` values and compared
+    field by field; no method of the returned object is called. A raise, ``None``, a value that
+    is not a plain :class:`ResolvedCapabilityProvenance` (subclasses and ``str`` subclasses
+    included), or a provenance for another capability or source ref is ``UNAVAILABLE``. A
+    derived identity that differs from the recorded one (digest, revision or algorithm) is
+    ``MISMATCH``; an equal one is ``MATCH``. ``current`` is always the rebuilt object.
     """
 
     method = SourceCheckMethod.DERIVE
@@ -438,27 +486,47 @@ def derive_capability_source(
             reason="capability source unavailable: derive returned no identity",
             method=method,
         )
-    if not isinstance(derived, ResolvedCapabilityProvenance):
+    try:
+        current = _rebuild_derived(derived)
+    except Exception:
+        current = None
+    if current is None:
         return SourceCheckResult(
             SourceCheckStatus.UNAVAILABLE,
             reason="source derive returned an untyped result",
             method=method,
         )
-    if derived.capability != locator.capability or derived.source_ref != locator.source_ref:
+    plain_recorded = (
+        recorded.capability,
+        recorded.source_ref,
+        recorded.revision,
+        recorded.digest_algorithm,
+        recorded.digest,
+    )
+    if not all(_exact_str(value) or value is None for value in plain_recorded):
+        recorded = ResolvedCapabilityProvenance.from_dict(recorded.to_dict())
+    if (current.capability, current.source_ref) != (locator.capability, locator.source_ref):
         return SourceCheckResult(
             SourceCheckStatus.UNAVAILABLE,
-            current=derived,
+            current=current,
             reason="source derive returned an identity for another capability source",
             method=method,
         )
-    if not derived.same_identity(recorded):
+    if _identity_fields(current) != _identity_fields(recorded):
         return SourceCheckResult(
             SourceCheckStatus.MISMATCH,
-            current=derived,
+            current=current,
             reason="derived identity differs from recorded provenance",
             method=method,
         )
-    return SourceCheckResult(SourceCheckStatus.MATCH, current=derived, method=method)
+    return SourceCheckResult(SourceCheckStatus.MATCH, current=current, method=method)
+
+
+def _defines_derive(source: object) -> bool:
+    """Route on the class: a ``derive`` found only via ``__getattr__`` or Mock does not count."""
+
+    found = inspect.getattr_static(type(source), "derive", _MISSING)
+    return found is not _MISSING and found is not None
 
 
 def check_capability_source(
@@ -467,11 +535,13 @@ def check_capability_source(
 ) -> SourceCheckResult:
     """Normalize a source check; the runtime, not the checker, decides MATCH.
 
-    A source with ``derive()`` is re-derived blinded (:func:`derive_capability_source`) and its
-    ``check()``, if any, is not called. Otherwise ``check()`` runs under the adapter obligation:
-    a missing checker, a checker error, a MATCH without a freshly derived identity, or any
-    unrecognized result is ``UNAVAILABLE``, and a claimed MATCH whose derived identity differs
-    from the recorded one is ``MISMATCH``.
+    A source whose class defines ``derive()`` is re-derived blinded
+    (:func:`derive_capability_source`) and its ``check()``, if any, is not called. Otherwise
+    ``check()`` is looked up on the instance, as before B2, and runs under the adapter
+    obligation: a missing checker, a checker error, a MATCH without a freshly derived identity,
+    or any unrecognized result is ``UNAVAILABLE``, and a claimed MATCH whose derived identity
+    differs from the recorded one is ``MISMATCH``. An exception while probing the source is
+    ``UNAVAILABLE``; nothing escapes to ``resume_run``.
     """
 
     if source is None:
@@ -479,9 +549,23 @@ def check_capability_source(
             SourceCheckStatus.UNAVAILABLE,
             reason=f"no source checker registered for {recorded.capability!r}",
         )
-    if callable(getattr(source, "derive", None)):
-        return derive_capability_source(cast(DerivingCapabilitySource, source), recorded)
-    check = getattr(source, "check", None)
+    try:
+        derives = _defines_derive(source)
+    except Exception as exc:
+        return SourceCheckResult(
+            SourceCheckStatus.UNAVAILABLE, reason=f"source probe failed: {exc}"
+        )
+    if derives:
+        deriving: DerivingCapabilitySource = source  # type: ignore[assignment]
+        return derive_capability_source(deriving, recorded)
+    try:
+        check = getattr(source, "check", None)
+    except Exception as exc:
+        return SourceCheckResult(
+            SourceCheckStatus.UNAVAILABLE,
+            reason=f"source check failed: {exc}",
+            method=SourceCheckMethod.CHECK,
+        )
     if not callable(check):
         return SourceCheckResult(
             SourceCheckStatus.UNAVAILABLE,

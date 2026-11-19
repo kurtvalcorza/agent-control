@@ -145,20 +145,33 @@ adapter implements `CapabilitySource` and is registered per capability name in a
     as `UNAVAILABLE`.
 
 **Blinded derive (preferred).** `CapabilitySourceLocator` has no digest field and admits no extra
-attributes, so a `derive()` adapter has nothing to copy: to answer at all it must compute a digest
-from the source, for example by re-reading the payload and calling `canonical_digest`. When a
-source implements `derive()`, the runtime uses it and never calls its `check()`. The comparison is
-the runtime's:
+attributes, so the runtime never passes the recorded digest to `derive()`. An honest adapter
+computes one from the source, for example by re-reading the payload and calling
+`canonical_digest`. The runtime does the comparison itself: it rebuilds the returned provenance
+from plain `str` values and compares field by field, calling no method of the returned object. A
+`ResolvedCapabilityProvenance` subclass, or a `str` subclass in any field, is rejected as an
+untyped result. The rebuilt object is what the event records as `current`.
+
+Routing is on the class: a source is sent down the derive path only when its class defines
+`derive` (found with `inspect.getattr_static`). A `derive` that appears only through `__getattr__`
+(a forwarding proxy or RPC stub) or a `Mock` auto-attribute does not count, so such check-only
+sources keep using `check()`, which is looked up on the instance as before B2. When the derive
+path is taken the runtime never calls `check()`. An exception while probing or calling the source
+is `UNAVAILABLE` and still records a `CapabilitySourceChecked` event. The outcomes:
 
 | `derive()` returns | Result |
 | --- | --- |
 | a provenance equal to the recorded identity | `MATCH`, resume may continue |
 | a different digest, revision or algorithm | `MISMATCH`, `INPUT_CHANGED`, resume blocks |
-| `None`, a raise, a non-provenance value, or a provenance for another capability or source ref | `UNAVAILABLE`, resume blocks |
+| `None`, a raise, a value that is not a plain `ResolvedCapabilityProvenance` (subclasses and `str`-subclass fields included), or a provenance for another capability or source ref | `UNAVAILABLE`, resume blocks |
 
-Blinding covers the call: what `derive()` is handed. An adapter that reaches into the host's
-event store or checkpoints for the recorded digest is outside what the runtime can see, as with
-any host code. `CallbackDerivingCapabilitySource(load_handler, derive_handler)` wraps two callables.
+**Trust boundary.** Blinding is a contract on the call, not isolation. The runtime never hands
+the digest to `derive()` and owns the comparison. It cannot stop in-process host code that goes
+looking for the digest, by frame introspection (the recorded provenance is a local in the
+caller's frame) or by reading the event store or checkpoints. A deliberately adversarial
+in-process adapter is out of scope, as with any host code. What blinding removes is the accidental
+echo that `check()` permits. `CallbackDerivingCapabilitySource(load_handler, derive_handler)`
+wraps two callables.
 
 **`check()` adapter obligation (not mechanically enforceable).** Sources with only `check()` keep
 working. `check()` must compute `current` from the source as it exists now, for example by

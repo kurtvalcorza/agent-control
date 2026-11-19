@@ -281,3 +281,119 @@ def test_callback_deriving_source() -> None:
     runtime, run_id, _ = _restart_with(source)
     assert runtime.resume_run(run_id).state == RunState.READY
     assert received == [CapabilitySourceLocator.of(_prov())]
+
+
+# --- review round 1 (B2-R1..R3) --------------------------------------------------------------
+
+
+class PermissiveStr(str):
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+    __hash__ = str.__hash__
+
+
+class LyingProvenance(ResolvedCapabilityProvenance):
+    __slots__ = ()
+
+    def same_identity(self, other: ResolvedCapabilityProvenance) -> bool:
+        return True
+
+
+class PermissiveDigestDerive(DerivingSource):
+    def derive(self, locator: CapabilitySourceLocator) -> ResolvedCapabilityProvenance:
+        return ResolvedCapabilityProvenance(
+            locator.capability, locator.source_ref, PermissiveStr("0" * 64), locator.revision
+        )
+
+
+class LyingSubclassDerive(DerivingSource):
+    def derive(self, locator: CapabilitySourceLocator) -> ResolvedCapabilityProvenance:
+        return LyingProvenance(locator.capability, locator.source_ref, "0" * 64, locator.revision)
+
+
+@pytest.mark.parametrize("source_type", [PermissiveDigestDerive, LyingSubclassDerive])
+def test_b2_r1_adapter_controlled_comparison_gives_no_match(source_type: type) -> None:
+    result = check_capability_source(source_type(), _prov())
+    assert result.status == SourceCheckStatus.UNAVAILABLE
+    assert result.reason == "source derive returned an untyped result"
+    runtime, run_id, calls = _restart_with(source_type())
+    with pytest.raises(RunBlocked, match="cannot be revalidated"):
+        runtime.resume_run(run_id)
+    assert calls == ["invoked"]
+    assert _last_check(runtime, run_id)["status"] == "unavailable"
+
+
+def test_b2_r1_current_is_rebuilt_by_the_runtime() -> None:
+    returned: list[ResolvedCapabilityProvenance] = []
+
+    class Recording(DerivingSource):
+        def derive(self, locator: CapabilitySourceLocator) -> ResolvedCapabilityProvenance:
+            item = super().derive(locator)
+            assert item is not None
+            returned.append(item)
+            return item
+
+    result = check_capability_source(Recording(), _prov())
+    assert result.status == SourceCheckStatus.MATCH
+    assert result.current is not None and result.current is not returned[0]
+    assert type(result.current) is ResolvedCapabilityProvenance
+    assert type(result.current.digest) is str
+
+
+class ForwardingProxy:
+    """A ``__getattr__`` proxy (an RPC stub, say) over a check-only adapter."""
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        if hasattr(self._inner, name):
+            return getattr(self._inner, name)
+        return lambda *args, **kwargs: None
+
+
+def test_b2_r2_forwarding_proxy_over_check_only_source_matches_via_check() -> None:
+    runtime, run_id, _ = _restart_with(ForwardingProxy(MutableSource(_contract())))
+    assert runtime.resume_run(run_id).state == RunState.READY
+    check = _last_check(runtime, run_id)
+    assert (check["status"], check["method"]) == ("match", "check")
+
+
+def test_b2_r2_mock_check_only_source_matches_via_check() -> None:
+    from unittest.mock import Mock
+
+    source = Mock()
+    source.check.return_value = SourceCheckResult(SourceCheckStatus.MATCH, current=_prov())
+    result = check_capability_source(source, _prov())
+    assert (result.status, result.method) == (SourceCheckStatus.MATCH, SourceCheckMethod.CHECK)
+    source.derive.assert_not_called()
+
+
+class LazyDeriveStub(DerivingSource):
+    @property
+    def derive(self) -> Any:  # type: ignore[override]
+        raise ConnectionError("stub connect failed")
+
+
+class LazyCheckStub:
+    def load(self, capability: str) -> CapabilityContract:
+        return _contract()
+
+    def __getattr__(self, name: str) -> Any:
+        raise ConnectionError("stub connect failed")
+
+
+@pytest.mark.parametrize("source_type", [LazyDeriveStub, LazyCheckStub])
+def test_b2_r3_raising_probe_is_unavailable_with_checked_event(source_type: type) -> None:
+    runtime, run_id, calls = _restart_with(source_type())
+    with pytest.raises(RunBlocked, match="cannot be revalidated"):
+        runtime.resume_run(run_id)
+    assert runtime.get_run(run_id).state == RunState.PAUSED
+    assert calls == ["invoked"]
+    check = _last_check(runtime, run_id)
+    assert check["status"] == "unavailable"
+    assert "stub connect failed" in check["reason"]
