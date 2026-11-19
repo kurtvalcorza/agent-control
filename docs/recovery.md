@@ -112,6 +112,28 @@ receipt then carries a `BLOCKED` verification, never PASS; in reconciliation it 
 "either | BLOCKED" row above (`RunBlocked`, no receipt). A resolved state follows the table above,
 including the contradiction rows.
 
+### Actor-routed delegation (Phase B3)
+
+A delegated capability whose contract declares `DelegationRoute.ACTOR` (see
+`docs/providers.md`) never reaches a provider:
+
+1. the `ActionIntent` is recorded first, with `delegated: true`, `authorization_state: pending`
+   and `reversible: false` (there is no provider descriptor, so cancellation never compensates it);
+2. a `HumanGate` opens for that intent, the node is `BLOCKED` and the run pauses. The other agent
+   or session (for example an Agent Relay handoff) does the work outside the runtime;
+3. approving the gate records that the handoff returned. On the next step the action is marked
+   started (`ActionStarted`, no `CapabilityResolved` or `CapabilityInvoked`) and verified only by
+   the independent `EXTERNAL_STATE` path above:
+   - PASS: an authoritative receipt; the node completes;
+   - FAIL (the effect is observed absent): the run fails with `VERIFICATION_FAILED`, no receipt;
+   - no observer, no observation, BLOCKED or INCONCLUSIVE: no receipt; the node stays `BLOCKED`
+     and the run pauses. Resume stays blocked on the started action until `reconcile_action()`
+     finds independent evidence, under the reconciliation table above.
+
+Rejection and an unanswered gate behave exactly as for any other `HumanGate`: rejection records
+`ActionRejected` and a `human_rejected` observation and leaves the node blocked, and the runtime
+has no gate timeout, so an undecided gate keeps the run paused until a decision or cancellation.
+
 ## Process restart
 
 SQLite events are authoritative. Reconstruct a `ControlPlane` over the same store and call

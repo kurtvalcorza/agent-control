@@ -200,7 +200,7 @@ Before `CapabilityRegistry.resolve()` the runtime pre-resolves the node's capabi
 | --- | --- | --- |
 | `SATISFIED` | closure, governance and runtime requirements present locally | continue to normal resolution |
 | `DEGRADED` | only declared optional clauses are unavailable; `dropped_clause_ids` lists them | continue; clause rule below applies |
-| `DELEGATION_REQUIRED` | a mandatory runtime facility is absent locally and delegation is permitted | continue as a delegated commit (see `docs/recovery.md`) |
+| `DELEGATION_REQUIRED` | a mandatory runtime facility is absent locally and delegation is permitted | continue as a delegated commit on the contract's delegation route (below and `docs/recovery.md`) |
 | `UNSATISFIED` | closure/governance missing, or a facility is absent and delegation is not permitted | run fails with `CAPABILITY_UNAVAILABLE`; nothing is invoked |
 
 Pre-resolution never decides budget, permissions, risk, policy or provider selection; those remain
@@ -216,5 +216,23 @@ clause.
 **In-run stability.** Within one plan version a capability's source identity must not change; a
 different identity at a later node records `INPUT_CHANGED` and blocks until an explicit replan.
 
-`agent-relay` is a coordination/handoff protocol, not a capability provider; nothing in the
-runtime registers or invokes it as one.
+**Delegation route (RFC #6 Phase B3).** `CapabilityContract.delegation_route` says where a
+`DELEGATION_REQUIRED` capability goes, and `CapabilityPreResolved.delegation_route` records it
+(`null` when no delegation is required):
+
+| Route | Runtime effect |
+| --- | --- |
+| `DelegationRoute.PROVIDER` (default) | the existing path: `CapabilityRegistry.resolve()` picks a registered provider and `invoke()` runs it |
+| `DelegationRoute.ACTOR` | an actor/`HumanGate` boundary: the run records the `ActionIntent`, opens a gate and pauses; nothing is resolved, invoked or budgeted |
+
+The route applies only to `DELEGATION_REQUIRED`; a capability whose requirements are met locally
+takes the provider path whatever its marker says. `ACTOR` requires `delegation_permitted=True`.
+Plan validation does not require a registered provider for an actor-routed node, so a host can
+leave the capability unregistered. An actor-routed node's verification must be `EXTERNAL_STATE`
+alone: the route captures no executor output, so any other kind would have no subject and the
+node is blocked before an intent is created. No policy rule is evaluated on this route, because
+there is no provider descriptor to evaluate and the gate is already unconditional.
+
+`agent-relay` is a coordination/handoff protocol, not a capability provider. A relay handoff
+ends at the actor route's gate; `DelegationRoute` has no relay value, and nothing in the runtime
+registers or invokes `agent-relay` as a provider.

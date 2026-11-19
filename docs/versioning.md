@@ -26,6 +26,13 @@ RFC #6 Phase B2 stays on `"2"`: it adds one additive field to `CapabilitySourceC
 source was registered). Status values and their effect on resume are unchanged; events recorded
 before B2 carry no `method`.
 
+RFC #6 Phase B3 stays on `"2"`: it adds one additive field to `CapabilityPreResolved`,
+`delegation_route` (`"provider"` or `"actor"` when the state is `delegation_required`, `null`
+otherwise; events recorded before B3 carry none and replay as the provider route). The actor route
+emits only existing events with their existing meanings: `ActionIntentCreated`, `HumanGateOpened`,
+`HumanGateResolved`, `ActionAuthorized`, `ActionStarted`, the verification events and, on PASS,
+`ActionReceiptRecorded`. It emits no `CapabilityResolved`, `CapabilityInvoked` or budget events.
+
 Every persisted event stores its schema version. Replay fails closed when an event uses an
 unsupported version; it never guesses how to interpret an unknown payload.
 

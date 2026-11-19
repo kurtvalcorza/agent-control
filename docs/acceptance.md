@@ -71,10 +71,12 @@ steps is tracked as an infrastructure blocker, not treated as a passing code gat
 | Delegated commit verification is independent | `ActionIntent.delegated`, `ExternalStateObserver` | `tests/test_delegated_verification.py` (M, N, O) |
 | Reconciliation cannot bypass delegated verification | delegated guard in `reconcile_action()` | `tests/test_delegated_verification.py` (Q + later-evidence + local-unchanged) |
 | Blinded source re-derivation (Phase B2, AC6-R3) | `CapabilitySourceLocator` (no digest field), `DerivingCapabilitySource.derive`, `derive_capability_source`, `CapabilitySourceChecked.method` | `tests/test_blinded_derive.py` (locator has no digest, derive never sees it, wrong digest MISMATCH, raise/None/untyped/other source UNAVAILABLE, check-only still works, both uses derive only) |
+| Agent Relay is not an executor/provider (Phase B3, L) | `DelegationRoute`, `CapabilityContract.delegation_route`, `CapabilityPreResolved.delegation_route`, `ControlPlane._execute_actor_route` | `tests/test_actor_route.py` (intent then gate then pause; no `resolve()`, no `invoke()`, no relay provider; approval needs §13 evidence; rejection and an undecided gate match existing gates; provider route and default unchanged) |
 | Observation references are independently resolvable (Phase B1) | `ExternalObservationResolver`, `ControlPlane(observation_resolver=...)`, `_resolve_observation_reference` | `tests/test_observation_resolver.py` (P: resolved PASS, unresolved BLOCKED, contradicting FAIL, resolver input, reconcile incl. AC6-R2) |
 
-Scenario L (an Agent Relay handoff ends at an actor/`HumanGate` boundary) has no executable route in
-Phase A. The runtime registers no relay provider. Scenario P (reference-only observations) is
+Scenario L (an Agent Relay handoff ends at an actor/`HumanGate` boundary) is covered by Phase B3:
+a contract with `delegation_route=ACTOR` records the intent, opens a gate and pauses without
+resolving or invoking anything, and the runtime registers no relay provider. Scenario P (reference-only observations) is
 covered by Phase B1: a separate host resolver re-fetches the reference; without one, a
 reference-only observation (`state=None`) is still blocked before the verifier
 (`tests/test_phase_a_review_fixes.py`, AC6-R7, and `tests/test_observation_resolver.py`).
