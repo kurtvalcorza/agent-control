@@ -105,7 +105,25 @@ def test_scenario_p_resolved_reference_reaches_verifier_and_passes() -> None:
         "resolver": "host-crm-resolver",
         "resolved_at": "2026-11-19T00:00:05Z",
         "method": "crm-api-refetch",
+        "metadata": {},
     }
+
+
+def test_scenario_p_resolution_metadata_reaches_evidence() -> None:
+    def resolve(_: dict) -> ObservationResolution:
+        return ObservationResolution(
+            state={"exists": True},
+            resolver="host-crm-resolver",
+            resolved_at="2026-11-19T00:00:05Z",
+            method="crm-api-refetch",
+            metadata={"etag": "etag-7", "http_status": 200},
+        )
+
+    runtime = _ref_runtime(resolver=CallbackExternalObservationResolver(resolve))
+    run = runtime.create_run(Goal("ref", ("done",)))
+    assert runtime.run_until_blocked(run.id).state == RunState.COMPLETED
+    evidence = _external_evidence(_receipts(runtime, run.id)[-1])
+    assert evidence["observation_resolution"]["metadata"] == {"etag": "etag-7", "http_status": 200}
 
 
 def _raising(_: dict) -> ObservationResolution:
@@ -141,14 +159,35 @@ def test_scenario_p_unresolved_reference_blocks_without_pass_receipt(
     assert external["evidence"]["observation_resolution"] is None
 
 
+class _ObserverAndResolver:
+    """One object with a working observe() and a working resolve() (B1-R1)."""
+
+    def observe(self, context: dict) -> ExternalObservation:
+        del context
+        return ExternalObservation(ref=REF, observer="dispatching-run", observed_at="t")
+
+    def resolve(self, reference: dict) -> ObservationResolution:
+        del reference
+        return ObservationResolution(
+            state={"exists": True}, resolver="same-object", resolved_at="t", method="m"
+        )
+
+
 def test_scenario_p_observer_cannot_double_as_resolver() -> None:
     subjects: list[Any] = []
-    runtime = _ref_runtime(subjects=subjects)
-    runtime.observation_resolver = runtime.external_observer
+    both = _ObserverAndResolver()
+    runtime = _delegated_runtime(_self_reporting, observer=both, seen_subjects=subjects)
+    runtime.observation_resolver = both
     run = runtime.create_run(Goal("ref", ("done",)))
+    # Without the identity tripwire this object would resolve its own reference and PASS.
     assert runtime.run_until_blocked(run.id).state == RunState.PAUSED
     assert subjects == []
-    assert [r["verification"]["status"] for r in _receipts(runtime, run.id)] == ["blocked"]
+    receipts = _receipts(runtime, run.id)
+    assert [r["verification"]["status"] for r in receipts] == ["blocked"]
+    external = receipts[0]["verification"]["evidence"]["verifiers"]["external_state"]
+    assert external["message"] == (
+        "external observation resolver must be separate from the observer"
+    )
 
 
 def test_scenario_p_resolved_state_contradicting_the_effect_fails() -> None:

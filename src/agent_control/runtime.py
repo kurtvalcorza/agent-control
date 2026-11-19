@@ -356,7 +356,9 @@ class ControlPlane(_ControlPlane):
             )
         observer: object = self.external_observer
         if resolver is observer:
-            # D3: the observer cannot vouch for its own reference.
+            # D3 tripwire: catches accidental reuse of the observer instance. It is not proof of
+            # independence (a wrapper bypasses it); independence rests on the resolver receiving
+            # only the reference.
             return blocked("external observation resolver must be separate from the observer")
         try:
             resolution = resolver.resolve(dict(reference))

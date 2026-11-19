@@ -438,8 +438,8 @@ class CallbackExternalStateObserver:
 class ObservationResolution:
     """External state re-fetched for an observation reference by a host resolver (RFC #6 P).
 
-    ``method`` records how the reference was resolved (for example ``"crm-api-refetch"``); it is
-    copied into verification evidence next to the reference.
+    ``method`` records how the reference was resolved (for example ``"crm-api-refetch"``). It and
+    ``metadata`` are copied into verification evidence next to the reference; ``state`` is not.
     """
 
     state: Any
@@ -457,6 +457,7 @@ class ObservationResolution:
             "resolver": self.resolver,
             "resolved_at": self.resolved_at,
             "method": self.method,
+            "metadata": dict(self.metadata),
         }
 
 

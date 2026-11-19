@@ -17,7 +17,7 @@ capability provenance and therefore need no source revalidation.
 
 RFC #6 Phase B1 stays on `"2"`: it adds one additive field inside `EXTERNAL_STATE` verification
 evidence (recorded in verification results and action receipts), `observation_resolution`
-(`resolver`, `resolved_at`, `method`; `null` when a reference-only observation could not be
+(`resolver`, `resolved_at`, `method`, `metadata`; `null` when a reference-only observation could not be
 resolved). It is present only for reference-only observations; direct observations and every
 existing event keep their meaning.
 

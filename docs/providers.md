@@ -107,15 +107,19 @@ host-supplied components take part, and they are deliberately separate:
   **reference-only** observation (`state=None`). `resolve(reference)` receives only
   `ExternalObservation.reference()` (`ref`, `observer`, `observed_at`, `verification_method`): no
   run context and no executor output. It returns an `ObservationResolution` with the re-fetched
-  `state` and its own provenance (`resolver`, `resolved_at`, `method`). Because it needs only the
+  `state` and its own provenance (`resolver`, `resolved_at`, `method`, optional `metadata`). Because it needs only the
   reference, a later `reconcile_action()` can re-fetch the same reference.
 
 A reference-only observation is `BLOCKED` before any verifier sees it when no resolver is
 registered, when the registered resolver is the observer object itself, when `resolve()` raises,
 and when it returns `None` or a resolution without state. A resolved observation is verified like
 a direct one (PASS = the effect is observed, FAIL = it is observed absent), and its evidence
-records `observation_resolution` next to `independent_observation`. A direct observation never
-consults the resolver.
+records `observation_resolution` (`resolver`, `resolved_at`, `method`, `metadata`; not the state)
+next to `independent_observation`. A direct observation never consults the resolver.
+
+The observer-object check is a tripwire for accidental reuse of the same instance, not proof of
+independence: a wrapper around a shared backend passes it. Independence rests on the resolver
+receiving only `reference()`, never run context or executor output.
 
 ## Capability sources and pre-resolution (RFC #6 Phase A)
 
