@@ -133,16 +133,56 @@ adapter implements `CapabilitySource` and is registered per capability name in a
   missing), required vs present governance, mandatory `RuntimeRequirement`s, stable
   `CapabilityClause`s (optional or mandatory, each with its own runtime requirements) and whether
   execution may be delegated;
-- `check(recorded) -> SourceCheckResult` re-derives the current identity of a recorded source
-  from the source itself (`MATCH` / `MISMATCH` / `UNAVAILABLE`). The runtime compares the returned
-  identity itself; a `MATCH` without a freshly derived identity is treated as `UNAVAILABLE`.
+- one way to re-derive a recorded source's identity on resume, preferably the blinded one:
+  - `derive(locator) -> ResolvedCapabilityProvenance | None` (RFC #6 Phase B2, the
+    `DerivingCapabilitySource` protocol) receives a `CapabilitySourceLocator`: the capability,
+    source ref and revision, and **never the recorded digest**. It returns the source's current
+    provenance, or `None` when the source is unavailable, and the runtime compares it with the
+    recorded identity;
+  - `check(recorded) -> SourceCheckResult` (the Phase A `CapabilitySource` protocol) receives the
+    whole recorded provenance and answers `MATCH` / `MISMATCH` / `UNAVAILABLE`. The runtime
+    compares the returned identity itself; a `MATCH` without a freshly derived identity is treated
+    as `UNAVAILABLE`.
 
-**Adapter obligation (not mechanically enforceable).** `check()` must compute `current` from the
-source as it exists now, for example by re-reading the payload and calling `canonical_digest`.
-The runtime catches the mechanical failures: no `current`, a `current` that differs from the
-recorded identity, and handing back the very object it was given. It cannot tell a checker that
-copies the recorded values into a new object from one that re-derives them. A checker that does
-that silently defeats resume revalidation, so adapter authors own this guarantee.
+**Blinded derive (preferred).** `CapabilitySourceLocator` has no digest field and admits no extra
+attributes, so the runtime never passes the recorded digest to `derive()`. An honest adapter
+computes one from the source, for example by re-reading the payload and calling
+`canonical_digest`. The runtime does the comparison itself: it rebuilds the returned provenance
+from plain `str` values and compares field by field, calling no method of the returned object. A
+`ResolvedCapabilityProvenance` subclass, or a `str` subclass in any field, is rejected as an
+untyped result. The rebuilt object is what the event records as `current`.
+
+Routing is on the class: a source is sent down the derive path only when its class defines
+`derive` (found with `inspect.getattr_static`). A `derive` that appears only through `__getattr__`
+(a forwarding proxy or RPC stub) or a `Mock` auto-attribute does not count, so such check-only
+sources keep using `check()`, which is looked up on the instance as before B2. When the derive
+path is taken the runtime never calls `check()`. An exception while probing or calling the source
+is `UNAVAILABLE` and still records a `CapabilitySourceChecked` event. The outcomes:
+
+| `derive()` returns | Result |
+| --- | --- |
+| a provenance equal to the recorded identity | `MATCH`, resume may continue |
+| a different digest, revision or algorithm | `MISMATCH`, `INPUT_CHANGED`, resume blocks |
+| `None`, a raise, a value that is not a plain `ResolvedCapabilityProvenance` (subclasses and `str`-subclass fields included), or a provenance for another capability or source ref | `UNAVAILABLE`, resume blocks |
+
+**Trust boundary.** Blinding is a contract on the call, not isolation. The runtime never hands
+the digest to `derive()` and owns the comparison. It cannot stop in-process host code that goes
+looking for the digest, by frame introspection (the recorded provenance is a local in the
+caller's frame) or by reading the event store or checkpoints. A deliberately adversarial
+in-process adapter is out of scope, as with any host code. What blinding removes is the accidental
+echo that `check()` permits. `CallbackDerivingCapabilitySource(load_handler, derive_handler)`
+wraps two callables.
+
+**`check()` adapter obligation (not mechanically enforceable).** Sources with only `check()` keep
+working. `check()` must compute `current` from the source as it exists now, for example by
+re-reading the payload and calling `canonical_digest`. The runtime catches the mechanical
+failures: no `current`, a `current` that differs from the recorded identity, and handing back the
+very object it was given. It cannot tell a checker that copies the recorded values into a new
+object from one that re-derives them. A checker that does that silently defeats resume
+revalidation, so adapter authors own this guarantee. Implement `derive()` to remove it.
+
+Each `CapabilitySourceChecked` event records `method`: `"derive"` or `"check"`, set by the runtime
+(a checker cannot claim `"derive"`), or `null` when no usable source was registered.
 
 Digests are `canonical_digest(payload_bytes)`: lowercase hexadecimal SHA-256 over the canonical
 payload bytes the adapter selects (`sha256:<hex>` is available as `provenance.identity`). Untyped,

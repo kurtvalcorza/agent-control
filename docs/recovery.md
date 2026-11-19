@@ -64,13 +64,17 @@ Capability source provenance is control-plane-owned state, so its resume check d
 depend on the optional `ExternalResourceVersionProvider`. It runs on **every** resume, with or
 without a checkpoint (a human-gate pause writes none), over the union of the provenance recorded
 in the run's history and the latest checkpoint's `capability_source_versions`. For each one,
-`resume_run()` asks the registered `CapabilitySource` to re-derive the current identity and records
-a `CapabilitySourceChecked` event:
+`resume_run()` asks the registered source to re-derive the current identity and records a
+`CapabilitySourceChecked` event. A source with `derive(locator)` is asked blinded: it gets the
+capability, source ref and revision but not the recorded digest, and the runtime compares what it
+returns (`method: "derive"`). A source with only `check(recorded)` is asked under the documented
+adapter obligation (`method: "check"`); see `providers.md`.
 
 - `MATCH` (identity re-derived and equal) — resume may continue;
 - `MISMATCH` — `INPUT_CHANGED` observation, resume blocks; replan to adopt the new identity;
-- `UNAVAILABLE`, a checker error, a MATCH without a re-derived identity, or **no registered
-  source at all** — resume blocks.
+- `UNAVAILABLE`, a checker or `derive()` error, a MATCH without a re-derived identity, a
+  `derive()` that returns nothing or an identity for another source, or **no registered source at
+  all** — resume blocks.
 
 ## Delegated commits
 

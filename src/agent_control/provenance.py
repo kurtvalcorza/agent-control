@@ -2,8 +2,9 @@
 
 These are normalized *control semantics*. They do not define how portable skills or capability
 bundles serialize themselves: an external source adapter translates whatever representation it
-consumes into a :class:`CapabilityContract` and answers :meth:`CapabilitySource.check` for a
-recorded provenance.
+consumes into a :class:`CapabilityContract` and re-derives a recorded source's identity, either
+blinded through :meth:`DerivingCapabilitySource.derive` (Phase B2) or through
+:meth:`CapabilitySource.check` under the documented adapter obligation.
 
 Pre-resolution is a precondition to ``CapabilityRegistry.resolve()``. It decides only semantic
 closure, required governance, runtime requirements, delegation permission and clause
@@ -14,9 +15,10 @@ policy engine.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -111,6 +113,44 @@ class ResolvedCapabilityProvenance:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilitySourceLocator:
+    """Where a recorded capability source lives, without the digest it was recorded with.
+
+    This is the only argument :meth:`DerivingCapabilitySource.derive` receives. It has no digest
+    field (and ``slots`` admits no extra attributes), so the runtime never hands the recorded
+    digest to ``derive()``, and the runtime compares the result itself (RFC #6 §22 B2, AC6-R3).
+    This is a contract on the call, not an isolation boundary: in-process host code that goes
+    looking for the digest (frame introspection, the event store) is outside what it can stop.
+    """
+
+    capability: str
+    source_ref: str
+    revision: str | None = None
+
+    @classmethod
+    def of(cls, recorded: ResolvedCapabilityProvenance) -> CapabilitySourceLocator:
+        return cls(
+            capability=recorded.capability,
+            source_ref=recorded.source_ref,
+            revision=recorded.revision,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "capability": self.capability,
+            "source_ref": self.source_ref,
+            "revision": self.revision,
+        }
+
+
+class SourceCheckMethod(StrEnum):
+    """How a recorded source identity was re-derived on resume."""
+
+    DERIVE = "derive"
+    CHECK = "check"
+
+
 class SourceCheckStatus(StrEnum):
     MATCH = "match"
     MISMATCH = "mismatch"
@@ -122,12 +162,14 @@ class SourceCheckResult:
     status: SourceCheckStatus
     current: ResolvedCapabilityProvenance | None = None
     reason: str = ""
+    method: SourceCheckMethod | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
             "current": None if self.current is None else self.current.to_dict(),
             "reason": self.reason,
+            "method": None if self.method is None else self.method.value,
         }
 
 
@@ -305,11 +347,33 @@ def pre_resolve(
 
 
 class CapabilitySource(Protocol):
-    """Control-plane boundary to an external source adapter for one capability."""
+    """Control-plane boundary to an external source adapter for one capability.
+
+    ``check()`` sees the recorded provenance, digest included, so it is trusted to re-derive
+    rather than copy it (the documented adapter obligation). Prefer
+    :class:`DerivingCapabilitySource`, whose ``derive()`` never sees the recorded digest.
+    """
 
     def load(self, capability: str) -> CapabilityContract: ...
 
     def check(self, recorded: ResolvedCapabilityProvenance) -> SourceCheckResult: ...
+
+
+class DerivingCapabilitySource(Protocol):
+    """A source adapter that re-derives identity blinded (RFC #6 §22 B2).
+
+    ``derive()`` receives only a :class:`CapabilitySourceLocator` (capability, source ref and
+    revision) and returns the source's current provenance, or ``None`` when the source is
+    unavailable. The runtime, not the adapter, compares it with the recorded identity. A source
+    may also implement ``check()``; when ``derive()`` is present the runtime uses it alone.
+    """
+
+    def load(self, capability: str) -> CapabilityContract: ...
+
+    def derive(self, locator: CapabilitySourceLocator) -> ResolvedCapabilityProvenance | None: ...
+
+
+AnyCapabilitySource = CapabilitySource | DerivingCapabilitySource
 
 
 @dataclass(slots=True)
@@ -324,31 +388,160 @@ class CallbackCapabilitySource:
         return self.check_handler(recorded)
 
 
+@dataclass(slots=True)
+class CallbackDerivingCapabilitySource:
+    load_handler: Callable[[str], CapabilityContract]
+    derive_handler: Callable[[CapabilitySourceLocator], ResolvedCapabilityProvenance | None]
+
+    def load(self, capability: str) -> CapabilityContract:
+        return self.load_handler(capability)
+
+    def derive(self, locator: CapabilitySourceLocator) -> ResolvedCapabilityProvenance | None:
+        return self.derive_handler(locator)
+
+
 class CapabilitySourceRegistry:
     def __init__(self) -> None:
-        self._sources: dict[str, CapabilitySource] = {}
+        self._sources: dict[str, AnyCapabilitySource] = {}
 
-    def register(self, capability: str, source: CapabilitySource) -> None:
+    def register(self, capability: str, source: AnyCapabilitySource) -> None:
         if capability in self._sources:
             raise ValueError(f"capability source already registered: {capability!r}")
         self._sources[capability] = source
 
-    def get(self, capability: str) -> CapabilitySource | None:
+    def get(self, capability: str) -> AnyCapabilitySource | None:
         return self._sources.get(capability)
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._sources))
 
 
+_MISSING = object()
+
+
+def _exact_str(value: object) -> bool:
+    return type(value) is str
+
+
+def _rebuild_derived(derived: object) -> ResolvedCapabilityProvenance | None:
+    """Rebuild a derived provenance from plain ``str`` values, or ``None`` if it is not plain.
+
+    Subclasses of :class:`ResolvedCapabilityProvenance` and ``str`` subclasses in any field are
+    rejected, so no adapter-controlled method takes part in the comparison (B2-R1).
+    """
+
+    if type(derived) is not ResolvedCapabilityProvenance:
+        return None
+    values = {
+        name: object.__getattribute__(derived, name)
+        for name in ("capability", "source_ref", "digest", "revision", "digest_algorithm")
+    }
+    if not all(
+        _exact_str(value)
+        for name, value in values.items()
+        if not (name == "revision" and value is None)
+    ):
+        return None
+    try:
+        return ResolvedCapabilityProvenance(
+            capability=str(values["capability"]),
+            source_ref=str(values["source_ref"]),
+            digest=str(values["digest"]),
+            revision=None if values["revision"] is None else str(values["revision"]),
+            digest_algorithm=str(values["digest_algorithm"]),
+        )
+    except ValueError:
+        return None
+
+
+def _identity_fields(item: ResolvedCapabilityProvenance) -> tuple[object, ...]:
+    return (item.capability, item.source_ref, item.revision, item.digest_algorithm, item.digest)
+
+
+def derive_capability_source(
+    source: DerivingCapabilitySource,
+    recorded: ResolvedCapabilityProvenance,
+) -> SourceCheckResult:
+    """Blinded re-derivation: ``derive()`` gets a locator, the runtime compares the result.
+
+    The returned provenance is rebuilt on the runtime side from plain ``str`` values and compared
+    field by field; no method of the returned object is called. A raise, ``None``, a value that
+    is not a plain :class:`ResolvedCapabilityProvenance` (subclasses and ``str`` subclasses
+    included), or a provenance for another capability or source ref is ``UNAVAILABLE``. A
+    derived identity that differs from the recorded one (digest, revision or algorithm) is
+    ``MISMATCH``; an equal one is ``MATCH``. ``current`` is always the rebuilt object.
+    """
+
+    method = SourceCheckMethod.DERIVE
+    locator = CapabilitySourceLocator.of(recorded)
+    try:
+        derived = source.derive(locator)
+    except Exception as exc:
+        return SourceCheckResult(
+            SourceCheckStatus.UNAVAILABLE, reason=f"source derive failed: {exc}", method=method
+        )
+    if derived is None:
+        return SourceCheckResult(
+            SourceCheckStatus.UNAVAILABLE,
+            reason="capability source unavailable: derive returned no identity",
+            method=method,
+        )
+    try:
+        current = _rebuild_derived(derived)
+    except Exception:
+        current = None
+    if current is None:
+        return SourceCheckResult(
+            SourceCheckStatus.UNAVAILABLE,
+            reason="source derive returned an untyped result",
+            method=method,
+        )
+    plain_recorded = (
+        recorded.capability,
+        recorded.source_ref,
+        recorded.revision,
+        recorded.digest_algorithm,
+        recorded.digest,
+    )
+    if not all(_exact_str(value) or value is None for value in plain_recorded):
+        recorded = ResolvedCapabilityProvenance.from_dict(recorded.to_dict())
+    if (current.capability, current.source_ref) != (locator.capability, locator.source_ref):
+        return SourceCheckResult(
+            SourceCheckStatus.UNAVAILABLE,
+            current=current,
+            reason="source derive returned an identity for another capability source",
+            method=method,
+        )
+    if _identity_fields(current) != _identity_fields(recorded):
+        return SourceCheckResult(
+            SourceCheckStatus.MISMATCH,
+            current=current,
+            reason="derived identity differs from recorded provenance",
+            method=method,
+        )
+    return SourceCheckResult(SourceCheckStatus.MATCH, current=current, method=method)
+
+
+def _defines_derive(source: object) -> bool:
+    """Route on the class: a ``derive`` found only via ``__getattr__`` or Mock does not count."""
+
+    found = inspect.getattr_static(type(source), "derive", _MISSING)
+    return found is not _MISSING and found is not None
+
+
 def check_capability_source(
-    source: CapabilitySource | None,
+    source: AnyCapabilitySource | None,
     recorded: ResolvedCapabilityProvenance,
 ) -> SourceCheckResult:
     """Normalize a source check; the runtime, not the checker, decides MATCH.
 
-    A missing checker, a checker error, a MATCH without a freshly derived identity, or any
-    unrecognized result is ``UNAVAILABLE``. A claimed MATCH whose derived identity differs from
-    the recorded one is ``MISMATCH``.
+    A source whose class defines ``derive()`` is re-derived blinded
+    (:func:`derive_capability_source`) and its ``check()``, if any, is not called. Otherwise
+    ``check()`` is looked up on the instance, as before B2, and runs under the adapter
+    obligation: a missing checker, a checker error, a MATCH without a freshly derived identity,
+    or any unrecognized result is ``UNAVAILABLE``, and a claimed MATCH whose derived identity
+    differs from the recorded one is ``MISMATCH``. An exception while probing the source is
+    ``UNAVAILABLE``; nothing escapes to ``resume_run``.
     """
 
     if source is None:
@@ -357,7 +550,36 @@ def check_capability_source(
             reason=f"no source checker registered for {recorded.capability!r}",
         )
     try:
-        result = source.check(recorded)
+        derives = _defines_derive(source)
+    except Exception as exc:
+        return SourceCheckResult(
+            SourceCheckStatus.UNAVAILABLE, reason=f"source probe failed: {exc}"
+        )
+    if derives:
+        deriving: DerivingCapabilitySource = source  # type: ignore[assignment]
+        return derive_capability_source(deriving, recorded)
+    try:
+        check = getattr(source, "check", None)
+    except Exception as exc:
+        return SourceCheckResult(
+            SourceCheckStatus.UNAVAILABLE,
+            reason=f"source check failed: {exc}",
+            method=SourceCheckMethod.CHECK,
+        )
+    if not callable(check):
+        return SourceCheckResult(
+            SourceCheckStatus.UNAVAILABLE,
+            reason=f"capability source for {recorded.capability!r} has neither derive nor check",
+        )
+    return replace(_check_capability_source(check, recorded), method=SourceCheckMethod.CHECK)
+
+
+def _check_capability_source(
+    check: Callable[[ResolvedCapabilityProvenance], object],
+    recorded: ResolvedCapabilityProvenance,
+) -> SourceCheckResult:
+    try:
+        result = check(recorded)
     except Exception as exc:
         return SourceCheckResult(
             SourceCheckStatus.UNAVAILABLE, reason=f"source check failed: {exc}"

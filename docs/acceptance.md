@@ -70,6 +70,7 @@ steps is tracked as an infrastructure blocker, not treated as a passing code gat
 | Fail-closed clause subset rule | `VerificationSpec.requires_clause_ids` | `tests/test_capability_provenance.py` (I, J) |
 | Delegated commit verification is independent | `ActionIntent.delegated`, `ExternalStateObserver` | `tests/test_delegated_verification.py` (M, N, O) |
 | Reconciliation cannot bypass delegated verification | delegated guard in `reconcile_action()` | `tests/test_delegated_verification.py` (Q + later-evidence + local-unchanged) |
+| Blinded source re-derivation (Phase B2, AC6-R3) | `CapabilitySourceLocator` (no digest field), `DerivingCapabilitySource.derive`, `derive_capability_source`, `CapabilitySourceChecked.method` | `tests/test_blinded_derive.py` (locator has no digest, derive never sees it, wrong digest MISMATCH, raise/None/untyped/other source UNAVAILABLE, check-only still works, both uses derive only) |
 | Observation references are independently resolvable (Phase B1) | `ExternalObservationResolver`, `ControlPlane(observation_resolver=...)`, `_resolve_observation_reference` | `tests/test_observation_resolver.py` (P: resolved PASS, unresolved BLOCKED, contradicting FAIL, resolver input, reconcile incl. AC6-R2) |
 
 Scenario L (an Agent Relay handoff ends at an actor/`HumanGate` boundary) has no executable route in
