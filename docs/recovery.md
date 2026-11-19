@@ -99,9 +99,14 @@ FAIL = it is observed absent**; any other status is no evidence either way:
 | `False` | PASS | contradiction: `RunBlocked`, no receipt (prevents a duplicate re-execution) |
 | either | no observer/observation, BLOCKED, INCONCLUSIVE | `RunBlocked`, no receipt |
 
-Phase A implements the preferred mechanism only: the verifier receives the observed state
-directly. An `ExternalObservation` with `state=None` (reference only) is `BLOCKED` before any
-verifier sees it, because there is no reference resolver yet.
+The preferred mechanism gives the verifier the observed state directly. An `ExternalObservation`
+with `state=None` (reference only) is re-fetched by the host-registered `ExternalObservationResolver`
+(`ControlPlane(observation_resolver=...)`, RFC #6 Phase B1), which receives only the reference and
+is separate from the observer. No resolver, a resolver that is the observer, a resolver error, or no
+resolved state is `BLOCKED` before any verifier sees the observation. On the run path the attempt's
+receipt then carries a `BLOCKED` verification, never PASS; in reconciliation it is the
+"either | BLOCKED" row above (`RunBlocked`, no receipt). A resolved state follows the table above,
+including the contradiction rows.
 
 ## Process restart
 

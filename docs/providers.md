@@ -95,6 +95,28 @@ If execution output is already persisted and verification later becomes availabl
 `reverify_node()` (or CLI `verification retry`) to verify the same output without invoking the
 capability again.
 
+### External observers and observation resolvers (RFC #6 §13)
+
+For a delegated commit the `EXTERNAL_STATE` verifier's subject is an `ExternalObservation`
+acquired by the dispatching run, never the executor's output (see `docs/recovery.md`). Two
+host-supplied components take part, and they are deliberately separate:
+
+- `ExternalStateObserver` (`ControlPlane(external_observer=...)`) receives run/node/intent context
+  and returns an `ExternalObservation`. With `state` set, the verifier sees that state directly.
+- `ExternalObservationResolver` (`ControlPlane(observation_resolver=...)`) re-fetches a
+  **reference-only** observation (`state=None`). `resolve(reference)` receives only
+  `ExternalObservation.reference()` (`ref`, `observer`, `observed_at`, `verification_method`): no
+  run context and no executor output. It returns an `ObservationResolution` with the re-fetched
+  `state` and its own provenance (`resolver`, `resolved_at`, `method`). Because it needs only the
+  reference, a later `reconcile_action()` can re-fetch the same reference.
+
+A reference-only observation is `BLOCKED` before any verifier sees it when no resolver is
+registered, when the registered resolver is the observer object itself, when `resolve()` raises,
+and when it returns `None` or a resolution without state. A resolved observation is verified like
+a direct one (PASS = the effect is observed, FAIL = it is observed absent), and its evidence
+records `observation_resolution` next to `independent_observation`. A direct observation never
+consults the resolver.
+
 ## Capability sources and pre-resolution (RFC #6 Phase A)
 
 A capability may additionally have a **source**: the portable skill or protocol the provider
